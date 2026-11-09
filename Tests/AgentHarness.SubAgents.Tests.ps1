@@ -110,8 +110,9 @@ function Invoke-AgentHarnessChat {
     if ($Body.tools.function.name -contains 'spawn_agent') { throw 'Recursive child spawning was exposed.' }
     if ($ApiKey -ne 'synthetic-child-key-for-environment-only') { throw 'Child key was not inherited.' }
     $taskText = [string](@($Body.messages | Where-Object role -eq user)[0].content)
-    if ($taskText -ne 'wired-child' -and $Body.ContainsKey('tool_choice')) { throw 'Provider OmitToolChoice was not inherited.' }
-    if ($taskText -eq 'wired-child' -and -not $Body.ContainsKey('tool_choice')) { throw 'Default provider tool_choice was not preserved.' }
+    $isWiredChild = $taskText -in 'wired-child', 'wired-empty-child'
+    if (-not $isWiredChild -and $Body.ContainsKey('tool_choice')) { throw 'Provider OmitToolChoice was not inherited.' }
+    if ($isWiredChild -and -not $Body.ContainsKey('tool_choice')) { throw 'Default provider tool_choice was not preserved.' }
     if ($taskText -eq 'wired-child' -and -not $Body.messages[0].content.Contains('Synthetic inherited skill guidance.')) { throw 'Child skill options were not inherited.' }
     if ($taskText -eq 'hold-child') { [Threading.Thread]::Sleep(30000) }
     $calls = @()
@@ -236,6 +237,27 @@ function Invoke-AgentHarnessChat {
 
     # Exercise public entry-point wiring, not just direct tool helpers.
     $parentOptions = $withBuiltins.Clone(); $parentOptions.WorkingDirectory = $agentRoot
+    foreach ($preference in 'Continue', 'Stop') {
+        foreach ($selection in @(
+            @{ Name = 'omitted'; Options = @{ NoSkills = $false } }
+            @{ Name = 'empty'; Options = @{ NoSkills = $false; Skill = @() } }
+            @{ Name = 'disabled'; Options = @{ NoSkills = $true } }
+        )) {
+            $emptySkillOptions = $parentOptions.Clone(); $emptySkillOptions.GlobalSkillPath = ''
+            foreach ($key in $selection.Options.Keys) { $emptySkillOptions[$key] = $selection.Options[$key] }
+            $parentCall = New-HarnessCall spawn_agent '{"task":"wired-empty-child"}' 'empty_skill_spawn'
+            Set-HarnessResponses @((New-HarnessResponse '' @($parentCall)), (New-HarnessResponse 'parent continued'))
+            $parent = Invoke-AgentHarness 'delegate without selected skills' @emptySkillOptions -Model 'synthetic-child-model' -ChatUri 'https://provider.invalid/child' -ApiKey $agentContext.SubAgentApiKey -YOLO -PassThru -ErrorAction $preference
+            $parentTool = @($parent.Messages | Where-Object role -eq tool)[0]
+            $emptySkillChild = ConvertFrom-Json -InputObject $parentTool.content -AsHashtable
+            $emptySkillTask = ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($emptySkillChild.TaskFile)) -AsHashtable
+            Assert-Harness ($emptySkillTask.Options.Skill -is [array] -and $emptySkillTask.Options.Skill.Count -eq 0) "$($selection.Name) skill selections persist as an empty JSON array under $preference"
+            Assert-Harness ($emptySkillTask.Options.NoSkills -eq $selection.Options.NoSkills) "$($selection.Name) skill selections preserve discovery settings under $preference"
+            $emptySkillCompletion = Invoke-SubAgentFixtureTool wait_agent @{ agent_id = $emptySkillChild.Id; timeout_seconds = 30 } -Context $agentContext -Preference $preference
+            $emptySkillStatus = ConvertFrom-Json -InputObject $emptySkillCompletion.content -AsHashtable
+            Assert-Harness ($emptySkillStatus.State -eq 'completed' -and $emptySkillStatus.Answer -eq 'Synthetic child completed.') "$($selection.Name) skill selections allow the real child worker to complete under $preference"
+        }
+    }
     $childSkills = Join-Path $agentRoot 'extra-skills/child-guidance'
     $null = New-Item -ItemType Directory -Path $childSkills -Force
     [IO.File]::WriteAllText((Join-Path $childSkills 'SKILL.md'), "---`nname: child-guidance`ndescription: Synthetic child skill.`n---`nSynthetic inherited skill guidance.")

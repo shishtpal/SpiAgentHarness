@@ -261,29 +261,33 @@ function Invoke-AgentHarness {
     if (-not $PSBoundParameters.ContainsKey('GlobalSkillPath')) {
         $GlobalSkillPath = if ($NoSkills -or $NoBuiltinTools) { '' } else { Get-AgentHarnessDefaultSkillPath }
     }
+
     $ctx = @{
-        Root          = (Resolve-Path -LiteralPath $WorkingDirectory -ErrorAction Stop).ProviderPath
-        YOLO          = [bool]$YOLO
-        AutoApprove   = [bool]$YOLO # Compatibility for existing custom tools.
-        Quiet         = [bool]$Quiet
-        NoPromptSound = [bool]$NoPromptSound
-        AllowWrite    = [bool]$AllowWrite
-        AllowShell    = [bool]($AllowShell -and -not $NoShellTool)
-        MaxSubAgents  = $MaxSubAgents
-        SubAgents     = [Collections.Generic.List[string]]::new()
+        Root            = (Resolve-Path -LiteralPath $WorkingDirectory -ErrorAction Stop).ProviderPath
+        YOLO            = [bool]$YOLO
+        AutoApprove     = [bool]$YOLO # Compatibility for existing custom tools.
+        Quiet           = [bool]$Quiet
+        NoPromptSound   = [bool]$NoPromptSound
+        AllowWrite      = [bool]$AllowWrite
+        AllowShell      = [bool]($AllowShell -and -not $NoShellTool)
+        MaxSubAgents    = $MaxSubAgents
+        SubAgents       = [Collections.Generic.List[string]]::new()
         SubAgentOptions = @{
             Instructions = $Instructions; NoAgentsFile = [bool]$NoAgentsFile
-            NoSkills = [bool]($NoSkills -or $NoBuiltinTools); Skill = @($Skill)
+            NoSkills = [bool]($NoSkills -or $NoBuiltinTools)
             GlobalSkillPath = $GlobalSkillPath
             MaxIterations = $MaxIterations; MaxToolOutputChars = $MaxToolOutputChars
             TimeoutSec = $TimeoutSec; NoPromptSound = [bool]$NoPromptSound
         }
-        SubAgentApiKey = $ApiKey
+        SubAgentApiKey  = $ApiKey
     }
+
     $ctx.DecisionState = New-AgentHarnessDecisionState -Definition $DecisionConfig -Path $DecisionConfigPath -Handlers $DecisionToolHandlers -Root $ctx.Root
     $ctx.SkillState = New-AgentHarnessSkillState -WorkingDirectory $ctx.Root -SkillPath $SkillPath -Skill $Skill `
         -GlobalSkillPath $GlobalSkillPath -Disabled:($NoSkills -or $NoBuiltinTools)
+    $ctx.SubAgentOptions.Skill = @($ctx.SkillState.Explicit)
     $ctx.SubAgentOptions.SkillPath = @($ctx.SkillState.Roots | Where-Object Priority -eq 2 | ForEach-Object { $_.Path })
+
     if ($GlobalSkillPath) { $ctx.SubAgentOptions.GlobalSkillPath = [IO.Path]::GetFullPath($GlobalSkillPath, $ctx.Root) }
     if ($null -ne $Temperature) { $ctx.SubAgentOptions.Temperature = [double]$Temperature }
     if (-not $PSBoundParameters.ContainsKey('McpServers')) {
@@ -298,6 +302,7 @@ function Invoke-AgentHarness {
     elseif ($PSBoundParameters.ContainsKey('McpServer')) {
         $McpServers = Select-AgentHarnessMcpServers -Servers $McpServers -Name $McpServer
     }
+
     $systemPrompt = Get-AgentHarnessSystemPrompt -WorkingDirectory $ctx.Root `
         -AdditionalInstructions $Instructions -NoAgentsFile:$NoAgentsFile -SkillState $ctx.SkillState
     $messages = New-AgentHarnessMessages -SystemPrompt $systemPrompt -Prompt $promptText -History $History `
@@ -310,6 +315,7 @@ function Invoke-AgentHarness {
 
     $toolTable = Get-AgentHarnessToolTable -Tools $Tools -NoBuiltinTools:$NoBuiltinTools `
         -AllowWrite:$AllowWrite -AllowShell:($AllowShell -and -not $NoShellTool) -AllowSubAgents:(-not $NoSubAgents) -AllowSkills:(-not $NoSkills) -DecisionState $ctx.DecisionState
+
     $mcpConnections = [Collections.Generic.List[hashtable]]::new()
     try {
         if ($McpServers) {
