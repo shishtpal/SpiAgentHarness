@@ -229,6 +229,19 @@ try {
     $homeChoice = Show-InteractiveMenu -Options @('One', 'Two', 'Three') -KeyReader (New-KeyReader $keys)
     Assert-Menu ($homeChoice -eq 'One') "Home key moves to first option"
 
+    & $module {
+        $script:Rendered = [Collections.Generic.List[string]]::new()
+        function script:Write-Host { param($Object, $ForegroundColor, $BackgroundColor, [switch]$NoNewline) $script:Rendered.Add([string]$Object) }
+        function script:Clear-Host { }
+    }
+    $choice = Show-InteractiveMenu -Options @('Same', 'Same') -Description 'Question context' -OptionDescriptions @('First detail', 'Second detail') `
+        -KeyReader (New-KeyReader @((New-Key -Key DownArrow), (New-Key -Key Enter)))
+    $rendered = & $module { $script:Rendered -join "`n" }
+    Assert-Menu ($choice -eq 'Same' -and $rendered -like '*Question context*' -and $rendered -like '*Second detail*') 'Descriptions render and highlighted option detail updates without changing return values'
+    $caught = $false
+    try { Show-InteractiveMenu -Options @('A', 'B') -OptionDescriptions @('Only one') } catch { $caught = $true }
+    Assert-Menu $caught 'Mismatched option descriptions fail before requesting input'
+
     Write-Host "Passed $checks interactive menu checks."
 }
 finally {

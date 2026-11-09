@@ -4,11 +4,16 @@ function Show-InteractiveMenu {
         [string]$Title = "Select an option",
         [switch]$MultiSelect,
         [switch]$Filter,
-        [scriptblock]$KeyReader
+        [scriptblock]$KeyReader,
+        [string]$Description,
+        [string[]]$OptionDescriptions
     )
 
     if (-not $Options -or $Options.Count -eq 0) {
         return $null
+    }
+    if ($OptionDescriptions -and $OptionDescriptions.Count -ne $Options.Count) {
+        throw 'OptionDescriptions must have one entry per option.'
     }
 
     $selectedIndex = 0
@@ -75,9 +80,13 @@ function Show-InteractiveMenu {
 
             $consoleHeight = try { [Console]::WindowHeight } catch { 0 }
             $pageSize = if ($consoleHeight -gt 12) { [Math]::Max(5, $consoleHeight - 8) } else { 20 }
+            if ($Description -or $OptionDescriptions) {
+                $pageSize = [Math]::Max(1, $pageSize - 5)
+            }
 
             try { Clear-Host } catch {}
             Write-Host $Title -ForegroundColor Cyan
+            if ($Description) { Write-Host $Description }
 
             # Action hints
             $helpParts = [System.Collections.Generic.List[string]]::new()
@@ -141,6 +150,10 @@ function Show-InteractiveMenu {
 
                 if ($filteredIndices.Count -gt $pageSize) {
                     Write-Host "`n   (Showing $($scrollOffset + 1)-$($visibleEnd + 1) of $($filteredIndices.Count))" -ForegroundColor DarkGray
+                }
+                if ($OptionDescriptions) {
+                    $optionDescription = $OptionDescriptions[$filteredIndices[$selectedIndex]]
+                    if ($optionDescription) { Write-Host "`n   $optionDescription" -ForegroundColor DarkGray }
                 }
             }
 

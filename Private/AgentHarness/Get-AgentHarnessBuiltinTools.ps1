@@ -44,6 +44,46 @@ function Get-AgentHarnessBuiltinTools {
         Script      = { param($a, $ctx) Invoke-AgentHarnessMenu -Arguments $a -Context $ctx }
     }
 
+    $userQuestionProperties = @{
+        id = @{ type = 'string'; minLength = 1; description = 'Distinct question ID used to identify its answer' }
+        title = @{ type = 'string'; minLength = 1; description = 'Question shown to the user' }
+        description = @{ type = 'string'; minLength = 1; description = 'Context explaining what answer is needed and why' }
+        type = @{ type = 'string'; enum = @('text', 'single_choice', 'multi_choice') }
+        options = @{
+            type = 'array'; minItems = 1
+            items = @{
+                type = 'object'; additionalProperties = $false; required = @('id', 'title')
+                properties = @{
+                    id = @{ type = 'string'; minLength = 1; description = 'Distinct option ID returned in the answer' }
+                    title = @{ type = 'string'; minLength = 1 }
+                    description = @{ type = 'string'; description = 'Optional detail shown when this option is highlighted' }
+                }
+            }
+        }
+    }
+    $tools['ask_user'] = @{
+        Description = 'Ask the user text, single_choice or multi_choice questions, sequentially in one call. Each requires id, title, description and type; choices require options with id/title and optional description; text cannot have options. Returns cancelled/answers in order, with id, cancelled and answer per question. Text answers are strings (null on cancellation); choice answers are arrays of option IDs (empty on cancellation). Cancellation stops remaining questions and retains prior answers. unavailable:true means no interactive console; answers is empty. Always waits in Quiet/YOLO; never invent answers or treat them as action approval. Prefer this tool for clarification.'
+        Parameters = @{
+            type = 'object'; additionalProperties = $false; required = @('questions')
+            properties = @{
+                questions = @{
+                    type = 'array'; minItems = 1
+                    items = @{
+                        type = 'object'; additionalProperties = $false; properties = $userQuestionProperties
+                        required = @('id', 'title', 'description', 'type')
+                        oneOf = @(
+                            @{ properties = @{ type = @{ enum = @('text') } }; not = @{ required = @('options') } },
+                            @{ properties = @{ type = @{ enum = @('single_choice', 'multi_choice') } }; required = @('options') }
+                        )
+                    }
+                }
+            }
+        }
+        OutputMustFit = $true
+        OutputLimitMessage = 'ERROR: User answers exceed MaxToolOutputChars; no complete answer result was returned. Do not infer answers or automatically ask the user again. Increase the output limit before collecting further answers.'
+        Script = { param($a, $ctx) Invoke-AgentHarnessUserQuestions -Arguments $a -Context $ctx }
+    }
+
     $tools['list_directory'] = @{
         Description = 'List files and folders in a directory (relative to the working directory).'
         Parameters  = @{

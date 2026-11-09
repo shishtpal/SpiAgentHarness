@@ -35,6 +35,9 @@
       JSON-configured servers are inactive by default. Use '*' for all servers,
       or one or more exact names. Override the file with -McpConfigPath (JSON).
       MCP tools require confirmation unless explicitly auto-approved or -YOLO is set.
+    * The ask_user tool collects text, single-choice and multiple-choice answers
+      with question titles and descriptions. Questions wait even in -Quiet/-YOLO;
+      Escape cancels, and missing interactive consoles return unavailable.
     * The show_interactive_menu tool asks one or several questions in a single call,
       each allowing one or more selections,
       including in -Quiet and -YOLO modes. Escape returns a cancellation result.

@@ -45,7 +45,8 @@ function Invoke-AgentHarnessToolCall {
     if ([string]::IsNullOrEmpty($result)) { $result = '(no output)' }
     if ($result.Length -gt $MaxOutputChars) {
         if ($tool.OutputMustFit) {
-            $result = if ($tool.DecisionTool) { 'ERROR: Decision result exceeds MaxToolOutputChars; increase the invocation output limit. No complete decision was returned.' }
+            $result = if ($tool.OutputLimitMessage) { $tool.OutputLimitMessage }
+            elseif ($tool.DecisionTool) { 'ERROR: Decision result exceeds MaxToolOutputChars; increase the invocation output limit. No complete decision was returned.' }
             else { 'ERROR: Skill page exceeds MaxToolOutputChars; retry with a smaller max_chars or increase the invocation output limit. No complete page was returned.' }
         }
         else { $result = $result.Substring(0, $MaxOutputChars) + "`n...[truncated $($result.Length - $MaxOutputChars) chars]" }

@@ -961,7 +961,9 @@ Compare @attach("media/image [1].PNG") @attach('report.pdf') @attach(media/clip.
     $result = Invoke-AgentHarness 'override' @withBuiltins -Tools @{ get_datetime = @{ Script = { param($a, $ctx) 'overridden' } } } -PassThru
     Assert-Harness ($result.Messages[3].content -eq 'overridden') 'Custom tool overrides built-in'
     $defaultNames = & $module { (Get-AgentHarnessBuiltinTools).Keys }
-    Assert-Harness ($defaultNames.Count -eq 17 -and $defaultNames -contains 'show_interactive_menu' -and $defaultNames -contains 'write_file' -and $defaultNames -contains 'edit_file' -and $defaultNames -contains 'run_powershell' -and $defaultNames -contains 'view_image' -and $defaultNames -contains 'spawn_agent' -and $defaultNames -contains 'agent_status' -and $defaultNames -contains 'wait_agent' -and $defaultNames -contains 'stop_agent' -and $defaultNames -contains 'load_skill' -and $defaultNames -contains 'read_skill_resource' -and $defaultNames -contains 'list_skills' -and $defaultNames -contains 'refresh_skills') 'Seventeen default built-in tools, including folder skills and sub-agent lifecycle tools'
+    Assert-Harness ($defaultNames.Count -eq 18 -and $defaultNames -contains 'ask_user' -and $defaultNames -contains 'show_interactive_menu' -and $defaultNames -contains 'write_file' -and $defaultNames -contains 'edit_file' -and $defaultNames -contains 'run_powershell' -and $defaultNames -contains 'view_image' -and $defaultNames -contains 'spawn_agent' -and $defaultNames -contains 'agent_status' -and $defaultNames -contains 'wait_agent' -and $defaultNames -contains 'stop_agent' -and $defaultNames -contains 'load_skill' -and $defaultNames -contains 'read_skill_resource' -and $defaultNames -contains 'list_skills' -and $defaultNames -contains 'refresh_skills') 'Eighteen default built-in tools, including user questions, folder skills and sub-agent lifecycle tools'
+
+    . (Join-Path $PSScriptRoot 'AgentHarness.UserQuestions.Tests.ps1')
 
     # Menu interactions use synthetic replies; no console input or provider network calls.
     $savedMenu = & $module { ${function:Show-InteractiveMenu} }
@@ -1186,7 +1188,7 @@ exit 7
     $approved = Invoke-AgentHarness 'approved shell' @withBuiltins -PassThru 6>$null
     Assert-Harness ((Get-Content -LiteralPath (Join-Path $fixture 'approved-shell.txt') -Raw) -eq 'raw command') 'Approved raw multiline command executes'
     Assert-Harness ($approved.Messages[3].content.Contains('exit code: 7') -and $approved.Messages[3].content.Contains('quotes: "yes"')) 'Shell preserves quotes and exit code'
-    Assert-Harness ($approved.Messages[3].content.Contains($fixture) -and $approved.Messages[3].content.Contains('stderr text')) 'Shell uses working directory and captures stderr'
+    Assert-Harness ($approved.Messages[3].content.Contains($fixture, [StringComparison]::OrdinalIgnoreCase) -and $approved.Messages[3].content.Contains('stderr text')) 'Shell uses working directory and captures stderr (Windows paths ignore case)'
     Assert-Harness ($approved.Messages[3].content.Contains("`n`nOutput:`n") -and $approved.Messages[3].content.Contains("`n`nErrors:`nstderr text")) 'Shell stdout and stderr are separated into readable sections'
     Assert-Harness ((& $module { $script:ConfirmationPrompts.Count }) -eq 2) 'Each non-YOLO command requires confirmation'
     Assert-Harness ((& $module { $script:ApprovalSounds.Count }) -eq 2) 'Each shell approval plays a notification sound'

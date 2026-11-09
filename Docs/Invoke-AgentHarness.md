@@ -165,7 +165,7 @@ Invoke-AgentHarness
 | Parameter | Default | Description |
 |---|---|---|
 | `-Quiet` | off | Turn off the verbose trace. |
-| `-NoPromptSound` | off | Mute the notification sound played before choice menus, write/shell approval and completion prompts. |
+| `-NoPromptSound` | off | Mute the notification sound played before user questions, choice menus, write/shell approval and completion prompts. |
 | `-PassThru` | off | Return an object (see [Return value](#return-value)) instead of just the answer string. |
 
 ---
@@ -394,7 +394,7 @@ Without explicit connection overrides, the replacement list includes registered 
 
 Recovery retains the invocation's `-All` setting: replacement catalogues are free-only by default and include paid and unknown-price models with `-All`. Initial `-Provider` and `-ModelFilter` restrictions do not carry over to recovery; connection overrides still restrict the provider as described above.
 
-Recovery menus still appear with `-Quiet` or `-YOLO`. Use `-NoModelRecovery` to disable recovery menus; automatic retries and initial automatic fallback remain available, but terminal request failures throw without prompting. For unattended runs, also pass `-NoCompletionPrompt` and disable or override `show_interactive_menu` as described below.
+Recovery menus still appear with `-Quiet` or `-YOLO`. Use `-NoModelRecovery` to disable recovery menus; automatic retries and initial automatic fallback remain available, but terminal request failures throw without prompting. For unattended runs, also pass `-NoCompletionPrompt` and disable or override `ask_user` and `show_interactive_menu` as described below.
 
 ### Continuing after completion
 
@@ -420,6 +420,7 @@ File tools reject paths lexically outside `-WorkingDirectory` (for example `..\.
 | `load_skill` | unless `-NoSkills` | `name`, `offset`, `max_chars` | Read a discovered skill's instructions in complete pages. |
 | `read_skill_resource` | unless `-NoSkills` | `name`, `path`, `offset`, `max_chars` | Read a supporting UTF-8 file within that skill folder. |
 | `show_interactive_menu` | default | Single: `title`, `options` (nonempty array of distinct, nonblank strings), `multi_select` (boolean, default `false`). Batch: `questions` array with `id`, `title`, `options`, optional `multi_select` per question. | Calls `Show-InteractiveMenu` with filtering. Single returns `cancelled` and `selections`; batch returns `cancelled` and `answers` by ID. Always prompts, including with `-Quiet` and `-YOLO`. |
+| `ask_user` | default | Nonempty `questions` array; each has `id`, `title`, `description`, `type` (`text`, `single_choice`, `multi_choice`). Choice questions require `options` objects with `id`, `title`, optional `description`. | Preferred clarification tool. Asks sequentially; returns `cancelled` and ordered `answers` with question IDs. Text answers are strings; choices return arrays of option IDs. Always waits in `-Quiet`/`-YOLO` when a console is available. |
 | `list_directory` | default | `path` (default `.`) | Lists up to 200 entries; folders end with `/`, files show size. |
 | `read_file` | default | `path`, `start_line` (default 1), `max_lines` (default 400, max 2000) | Returns numbered lines. |
 | `search_files` | default | `pattern` (regex), directory `path` (default `.`), `glob` (default `*`), `ignore_dirs` and `exclude_files` (arrays, default `[]`) | Recursive regex search; skips `.git`, `node_modules`, `dist`, `bin`, `Initialize.ps1`, and additional excluded names. Up to 50 matching lines as `path:line: text`, followed by limit/skip notices. Files larger than 10 MiB and detected binary files are skipped; scan budget 10 seconds, regex budget 250 ms per line. |
@@ -462,6 +463,59 @@ For example, the model can search PowerShell files while also skipping `vendor` 
     "ignore_dirs": ["vendor", "coverage"]
 }
 ```
+
+### Asking the user questions
+
+Prefer `ask_user` when the agent needs requirements, typed information or choices. It collects answers locally from the interactive console, with a title and description for every question:
+
+```json
+{
+    "questions": [
+        {
+            "id": "name",
+            "title": "What should we call the project?",
+            "description": "This name appears in the application header.",
+            "type": "text"
+        },
+        {
+            "id": "storage",
+            "title": "Where should data be stored?",
+            "description": "Choose storage for the first version.",
+            "type": "single_choice",
+            "options": [
+                { "id": "local", "title": "Local files", "description": "Keep data on this computer." },
+                { "id": "database", "title": "Database", "description": "Use a shared database." }
+            ]
+        },
+        {
+            "id": "features",
+            "title": "Which features should we include?",
+            "description": "Select the features needed for the first version.",
+            "type": "multi_choice",
+            "options": [
+                { "id": "search", "title": "Search" },
+                { "id": "export", "title": "Export" }
+            ]
+        }
+    ]
+}
+```
+
+Text input is a single line: type an answer, use Backspace to erase, Enter to submit a nonblank answer, or Escape to cancel and discard the current text. Blank Enter keeps waiting; submitted whitespace is otherwise preserved. Choice questions use the existing menu navigation, filtering and selection keys described below. Options are numbered for unambiguous mapping even when titles repeat. The highlighted option's description appears below the list. Multi-choice Enter with nothing checked returns the highlighted option, matching the existing menu behavior.
+
+Example result:
+
+```json
+{"cancelled":false,"answers":[{"id":"name","cancelled":false,"answer":"School Portal"},{"id":"storage","cancelled":false,"answer":["local"]},{"id":"features","cancelled":false,"answer":["search","export"]}]}
+```
+
+`answers` and all choice `answer` values remain JSON arrays, including singleton and empty arrays. Question IDs must be distinct within a batch; option IDs must be distinct within their question. IDs and type names are case-sensitive. Titles, question descriptions and IDs must be nonblank strings. Option descriptions are optional strings. Text questions cannot have options. Unknown fields, including an agent-supplied `answer`, are rejected. The whole batch is validated before any prompt or sound. Ask dependent follow-up questions in a later tool call after receiving the earlier answers.
+
+Cancelling stops the batch, retains completed answers, includes the cancelled question, and omits unasked questions. Cancelled text has `answer: null`; cancelled choices have `answer: []`. Console errors produce an `ERROR:` tool result and stop the batch. When input is redirected or the host has no usable console, the tool returns `{"cancelled":false,"unavailable":true,"answers":[]}` without prompting or sounding. The agent must not invent answers, repeat cancelled questions automatically, or treat an answer as write/shell approval.
+
+The tool waits even with `-Quiet`, `-YOLO`, `-NoModelRecovery` or `-NoCompletionPrompt`. `-NoPromptSound` mutes its notification. For unattended runs, disable built-ins with `-NoBuiltinTools`, or override both `ask_user` and `show_interactive_menu` through `-Tools` to return explicit unavailable/cancellation results. Input detection does not identify an unattended terminal that still has a console. Answers enter the model conversation like other tool results; this tool is not a secret-input mechanism. If the result exceeds `-MaxToolOutputChars`, it returns an explicit error instead of truncated JSON. The collected answers are not returned in that error; increase the limit before collecting further answers and do not automatically ask the same questions again.
+
+Implementation stays private: `Invoke-AgentHarnessUserQuestions` validates and sequences questions, `Read-InteractiveText` reads text, and `Show-InteractiveMenu` renders choices. The console menu accepts optional `Description` and parallel `OptionDescriptions` parameters while preserving its existing string return values. No new PowerShell commands are exported.
 
 ### Asking the user to choose
 
@@ -728,7 +782,7 @@ Details:
 
 - General trace messages use `Write-LogMessage` without timestamps. Tool calls, results, and approval requests use labeled console blocks without log prefixes in their contents. Both write to the information stream, so `6>$null` silences them.
 - A write or shell action requiring approval is shown once in its approval block. With `-YOLO`, the action is shown as an ordinary tool-call block instead.
-- `-Quiet` does not suppress interactive prompts: model selection/recovery menus, `show_interactive_menu`, and the approval prompts for `write_file`, `edit_file` and `run_powershell` still appear. Approval prompts also accept custom guidance to redirect the agent.
+- `-Quiet` does not suppress interactive prompts: model selection/recovery menus, `ask_user`, `show_interactive_menu`, and the approval prompts for `write_file`, `edit_file` and `run_powershell` still appear. Approval prompts also accept custom guidance to redirect the agent.
 - A Windows alarm sound plays immediately before each write/shell approval prompt, including with `-Quiet`. If no alarm WAV can play, repeated alternating beeps are used. Use `-NoPromptSound` to mute it. `-YOLO` skips both permission prompts and their sounds. Audio failures do not block approval.
 - Warnings (for example reaching `-MaxIterations`) are always shown.
 
