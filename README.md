@@ -22,6 +22,8 @@ Menus, logging, sound, and all runtime helpers are private. Provider registratio
 
 Global skills default to `.agents/skills` beneath the installed module. MCP configuration defaults to `mcp.json` beside the manifest and is local configuration excluded from Git. Use `Config/AgentHarness.mcp.example.json` as an example. Servers require explicit `-McpServer` activation. Decision tools are configured with JSON packages; see [Decision tools](Docs/DecisionTools.md).
 
+[REA integration](Docs/REA.md) uses an already installed local CLI for static JavaScript/Electron and managed .NET inspection, with a scoped MCP allowlist, a module-owned workflow and an opt-in synthetic smoke test. It installs no software.
+
 Verify with mocked providers and synthetic files:
 
 ```powershell

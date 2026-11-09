@@ -1,0 +1,29 @@
+{
+    "mcpServers": {
+        "rea": {
+            "command": "rea",
+            "args": ["mcp"],
+            "env": {
+                "REA_MCP_INPUT_SCHEMA_PROFILE": "compact",
+                "REA_MCP_OUTPUT_SCHEMA_PROFILE": "off"
+            },
+            "timeoutSec": 360,
+            "allowedTools": [
+                "analyze_javascript_application",
+                "inspect_analysis_view",
+                "trace_application_feature",
+                "trace_javascript_semantics",
+                "compare_application_versions",
+                "compare_javascript_export_shapes",
+                "inspect_managed_artifact",
+                "inspect_managed_members",
+                "inspect_managed_native_boundaries",
+                "compare_managed_members",
+                "project_managed_application_graph",
+                "binary_session",
+                "get_evidence_bundle"
+            ],
+            "autoApproveTools": []
+        }
+    }
+}

@@ -638,6 +638,8 @@ Notes:
 
 ## MCP servers
 
+For static JavaScript/Electron and managed .NET inspection with an existing REA CLI, see [REA integration](REA.md) and [its configuration example](../Config/AgentHarness.rea.mcp.example.json).
+
 `-McpServers` makes the harness an MCP client. It discovers server tools, exposes their input schemas to the selected model, and routes tool calls back to their originating server. The model needs function calling support. MCP connections stay open across continuation prompts and model recovery, and close when the invocation ends or fails. Discovery is a snapshot for that invocation; start a new invocation to refresh a changed tool catalogue.
 
 The shared configuration is [mcp.json](../mcp.json) in this PowerShell module's root directory. Listing and activation use that file regardless of the current working directory. Configured JSON servers are **inactive by default**:
