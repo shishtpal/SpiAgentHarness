@@ -36,6 +36,7 @@ function Start-AgentHarnessSubAgent {
     $options.NoSubAgents = $true
     $options.NoModelRecovery = $true
     $options.NoCompletionPrompt = $true
+    $options.NoPromptHistory = $true # Delegated model tasks are not user-authored prompts.
     $options.PassThru = $true
     $options.Prompt = $Arguments.task
     $workStatus = "$relative/WORK_STATUS.md"

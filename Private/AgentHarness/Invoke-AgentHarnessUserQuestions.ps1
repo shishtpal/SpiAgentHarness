@@ -24,9 +24,11 @@ function Invoke-AgentHarnessUserQuestions {
                     -Options $labels -OptionDescriptions $descriptions -MultiSelect:($question.type -ceq 'multi_choice') `
                     -Filter -ErrorAction Stop 2>&1)
         }
+
         # Catch nonterminating errors from replacements retaining Continue preference.
         $inputError = $raw | Where-Object { $_ -is [Management.Automation.ErrorRecord] } | Select-Object -First 1
         if ($inputError) { throw $inputError }
+
         $values = @($raw | Where-Object { $null -ne $_ })
         $cancelled = $values.Count -eq 0
         if ($question.type -ceq 'text') {
@@ -50,7 +52,13 @@ function Invoke-AgentHarnessUserQuestions {
             }
             $value = $selectedIds.ToArray()
         }
+
         $answers.Add(@{ id = $question.id; cancelled = $cancelled; answer = $value })
+        $answerText = if ($question.type -ceq 'text' -and -not $cancelled) { $value } else { '' }
+        Write-AgentHarnessPromptHistory -Context $Context -Type 'question_answer' -Text $answerText -Data @{
+            id = $question.id; title = $question.title; questionType = $question.type
+            answer = $value; cancelled = $cancelled
+        }
         if ($cancelled) { break }
     }
     @{ cancelled = $cancelled; answers = $answers.ToArray() } | ConvertTo-Json -Depth 10 -Compress

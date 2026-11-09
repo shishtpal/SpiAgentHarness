@@ -36,13 +36,19 @@ function Invoke-AgentHarnessMenu {
         }
         $selection = @(Show-InteractiveMenu -Options $question.options -Title $question.title `
                 -MultiSelect:($question.multi_select -eq $true) -Filter -ErrorAction Stop 2>&1)
+
         # An external menu can explicitly write a nonterminating error. Stop the batch too.
         $menuError = $selection | Where-Object { $_ -is [Management.Automation.ErrorRecord] } | Select-Object -First 1
         if ($menuError) { throw $menuError }
+
         # PowerShell can emit a null item on Escape; always return a JSON array.
         $selections = @($selection | Where-Object { $null -ne $_ })
         $cancelled = $selections.Count -eq 0
         $answer = @{ cancelled = $cancelled; selections = $selections }
+        Write-AgentHarnessPromptHistory -Context $Context -Type 'menu_answer' -Text '' -Data @{
+            id = $question.id; title = $question.title; selections = $selections; cancelled = $cancelled
+        }
+
         if (-not $isBatch) { return ($answer | ConvertTo-Json -Compress) }
         $answer.id = $question.id
         $answers.Add($answer)

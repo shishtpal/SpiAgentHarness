@@ -74,6 +74,11 @@
     Files can also be added with @attach("path/to/file") inside any prompt.
     Attachments are retained in History and when continuing with another task.
 
+.PARAMETER NoPromptHistory
+    Disable automatic local input recording under WorkingDirectory/.agents/prompts.
+    By default, each invocation appends original prompts and interactive replies to
+    its own UTF-8 JSONL file. Attachment contents and prior History are not recorded.
+
 .PARAMETER McpServers
     Hashtable mapping server names to explicit configuration hashtables. Use Command
     and Arguments for stdio, or Url for Streamable HTTP. AllowedTools restricts exact,
@@ -208,6 +213,7 @@ function Invoke-AgentHarness {
         [object[]]$History,                # transcript from a previous -PassThru run
         [ValidateRange(1, [int]::MaxValue)][int]$MaxIterations = 100,
         [switch]$NoCompletionPrompt,       # return after one task without asking what next
+        [switch]$NoPromptHistory,          # disable local prompt/reply journal
 
         # --- tools ----------------------------------------------------------
         [hashtable]$Tools,                 # extra / overriding tools (see .EXAMPLE)
@@ -281,6 +287,16 @@ function Invoke-AgentHarness {
         }
         SubAgentApiKey  = $ApiKey
     }
+
+    if (-not $NoPromptHistory) {
+        $sessionId = [guid]::NewGuid().ToString('N')
+        $stamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')
+        $ctx.PromptHistory = @{
+            SessionId = $sessionId; RelativePath = ".agents/prompts/$stamp-$sessionId.jsonl"
+            Sequence = 0; Failed = $false; Path = $null
+        }
+    }
+    Write-AgentHarnessPromptHistory -Context $ctx -Type 'initial_prompt' -Text $promptText -Data @{ attachments = @($Attachments) }
 
     $ctx.DecisionState = New-AgentHarnessDecisionState -Definition $DecisionConfig -Path $DecisionConfigPath -Handlers $DecisionToolHandlers -Root $ctx.Root
     $ctx.SkillState = New-AgentHarnessSkillState -WorkingDirectory $ctx.Root -SkillPath $SkillPath -Skill $Skill `
@@ -371,7 +387,7 @@ function Invoke-AgentHarness {
                 if ($NoCompletionPrompt) { break }
                 $retryPrompt = $false
                 while ($true) {
-                    $nextPrompt = Read-AgentHarnessNextPrompt -Answer $final -NoPromptSound:$NoPromptSound -SkipAnswer:$retryPrompt
+                    $nextPrompt = Read-AgentHarnessNextPrompt -Answer $final -NoPromptSound:$NoPromptSound -SkipAnswer:$retryPrompt -Context $ctx
                     if ([string]::IsNullOrWhiteSpace($nextPrompt)) { break }
 
                     try {
@@ -437,13 +453,14 @@ function Invoke-AgentHarness {
 
         if ($PassThru) {
             [pscustomobject]@{
-                Answer           = $final
-                Provider         = $used.Provider
-                Model            = $used.Id
-                Iterations       = $iteration
-                PromptTokens     = $tokIn
-                CompletionTokens = $tokOut
-                Messages         = $messages.ToArray()
+                Answer            = $final
+                Provider          = $used.Provider
+                Model             = $used.Id
+                Iterations        = $iteration
+                PromptTokens      = $tokIn
+                CompletionTokens  = $tokOut
+                Messages          = $messages.ToArray()
+                PromptHistoryPath = $(if ($ctx.PromptHistory) { $ctx.PromptHistory.Path })
             }
         }
         else { $final }
