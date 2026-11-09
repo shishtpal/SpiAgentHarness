@@ -1,0 +1,236 @@
+{
+  "format_version": 1,
+  "status": "implemented_mock_verified_pending_live_verification",
+  "plan": "../Docs/DecisionTools.Plan.md",
+  "tool": {
+    "type": "function",
+    "function": {
+      "name": "decide_screen_target",
+      "description": "Choose an observed screen target for a goal, using candidate descriptions and an optional screenshot. Returns a target or abstention; does not click.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "goal",
+          "snapshot",
+          "candidates"
+        ],
+        "properties": {
+          "goal": {
+            "type": "string",
+            "minLength": 1
+          },
+          "snapshot": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "captured_at",
+              "source",
+              "coordinate_space",
+              "width",
+              "height"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "captured_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "source": {
+                "type": "string",
+                "description": "Observed browser tab, window, or display identifier."
+              },
+              "coordinate_space": {
+                "type": "string",
+                "enum": [
+                  "browser_css_pixels",
+                  "screenshot_pixels",
+                  "desktop_physical_pixels"
+                ]
+              },
+              "width": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "height": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "screenshot_path": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Optional local image file; relative paths use the harness working directory. Requires an image-capable profile."
+              }
+            }
+          },
+          "candidates": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 63,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "description"
+              ],
+              "anyOf": [
+                {
+                  "required": [
+                    "locator"
+                  ]
+                },
+                {
+                  "required": [
+                    "bounds"
+                  ]
+                }
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Unique observed candidate ID; none is reserved."
+                },
+                "description": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "locator": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Observed locator understood by the existing UI executor; tied to this snapshot."
+                },
+                "bounds": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "x",
+                    "y",
+                    "width",
+                    "height"
+                  ],
+                  "properties": {
+                    "x": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "y": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "width": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "height": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "config": {
+    "active_profile": "luna",
+    "profiles": {
+      "luna": {
+        "provider": "ExperientialLabs",
+        "model": "gpt-6-luna-decisions",
+        "protocol": "openai_decisions",
+        "endpoint": "https://api.experientiallabs.ai/v1/decisions",
+        "key_env_var": "EXPLABS_API_KEY",
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "schema_status": "adapter_implemented_pending_live_verification",
+        "references": [
+          "https://platform.experientiallabs.ai/models/gpt-6-luna-decisions"
+        ]
+      },
+      "clef": {
+        "provider": "ExperientialLabs",
+        "model": "clef",
+        "protocol": "systemone",
+        "endpoint": "https://api.experientiallabs.ai/v1/systemone",
+        "key_env_var": "EXPLABS_API_KEY",
+        "input_modalities": [
+          "text"
+        ],
+        "schema_status": "native_systemone_adapter_pending_live_verification",
+        "references": [
+          "https://platform.experientiallabs.ai/models/clef"
+        ]
+      }
+    },
+    "request": {
+      "timeout_sec": 30,
+      "max_retries": 0,
+      "automatic_model_fallback": false
+    },
+    "selection": {
+      "question": "Which observed target best satisfies the goal? Select none when no candidate is appropriate or the evidence is insufficient.",
+      "abstain_choice_id": "none",
+      "max_candidates": 63,
+      "min_choice_probability": 0.85,
+      "min_probability_margin": 0.15,
+      "margin_definition": "Selected choice probability minus the highest alternative probability, including none.",
+      "missing_probability_behavior": "abstain",
+      "threshold_status": "illustrative_requires_evaluation"
+    },
+    "snapshot": {
+      "require_target_revalidation_before_click": true,
+      "max_age_sec": 120
+    },
+    "execution": {
+      "perform_click": false
+    }
+  },
+  "result_contract": {
+    "statuses": [
+      "selected",
+      "abstained",
+      "refused",
+      "stale_snapshot"
+    ],
+    "fields": {
+      "status": "One of statuses.",
+      "snapshot_id": "Original observation ID.",
+      "target": "Selected candidate copied from validated input, or null. Never model-generated coordinates.",
+      "choice_probability": "Provider-reported probability of the selected choice, when available; otherwise null.",
+      "probability_margin": "Difference from the strongest alternative, when available; otherwise null.",
+      "reason_code": "Deterministic local status explanation; no invented model rationale.",
+      "provider": "Configured gateway name.",
+      "model": "Served model ID.",
+      "request_id": "Provider request ID, when available.",
+      "usage": "Provider-reported usage, when available.",
+      "elapsed_milliseconds": "Measured request duration.",
+      "requires_target_revalidation": "Always true; the consumer must revalidate current UI before clicking.",
+      "requires_coordinate_transform": "True for screenshot pixel coordinates; consumer must provide its observed screenshot-to-target transform."
+    },
+    "errors": "Configuration, validation, HTTP, transport, or invalid-response failures use sanitized harness tool errors."
+  },
+  "runtime_validation": [
+    "Validate inputs locally even when a model ignores the advertised JSON Schema.",
+    "Reject duplicate candidate IDs and the reserved none ID; include none within the adapter option limit.",
+    "Reject screenshot input for text-only profiles without silently discarding it.",
+    "Validate image type and size before sending inline image data.",
+    "Reject non-HTTPS endpoints and URLs containing credentials.",
+    "Validate bounds within snapshot dimensions; do not mix coordinate spaces.",
+    "Validate answers against original candidate IDs and reject invalid probabilities.",
+    "Preserve refusals and abstain when required probability data is unavailable.",
+    "Revalidate source and target against current UI before execution; reobserve and decide again when stale.",
+    "Never expose credentials, raw image data, or unsanitized provider error bodies in tool logs."
+  ],
+  "handler": "screen_target"
+}

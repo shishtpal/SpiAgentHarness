@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Configuration>
+    <ViewDefinitions>
+        <View>
+            <Name>SpiAgentHarness.DecisionModelResult</Name>
+            <ViewSelectedBy>
+                <TypeName>SpiAgentHarness.DecisionModelResult</TypeName>
+            </ViewSelectedBy>
+            <CustomControl>
+                <CustomEntries>
+                    <CustomEntry>
+                        <CustomItem>
+                            <ExpressionBinding>
+                                <ScriptBlock>
+                                    $served = if ($_.ServedBy) { ", served by $($_.ServedBy)" } else { '' }
+                                    $requested = if ($_.RequestedModel -and $_.RequestedModel -cne $_.Model) { " (requested $($_.RequestedModel))" } else { '' }
+                                    $header = 'Model: {0}{1}  [{2}{3}, {4:N0} ms]' -f $_.Model, $requested, $_.Provider, $served, $_.ElapsedMilliseconds
+                                    $table = ($_.Summary | Format-Table -AutoSize | Out-String -Width 4096).TrimEnd()
+                                    "$header`r`n$table`r`n"
+                                </ScriptBlock>
+                            </ExpressionBinding>
+                        </CustomItem>
+                    </CustomEntry>
+                </CustomEntries>
+            </CustomControl>
+        </View>
+        <View>
+            <Name>SpiAgentHarness.DecisionModelAnswer</Name>
+            <ViewSelectedBy>
+                <TypeName>SpiAgentHarness.DecisionModelAnswer</TypeName>
+            </ViewSelectedBy>
+            <TableControl>
+                <TableHeaders>
+                    <TableColumnHeader><Label>Question</Label></TableColumnHeader>
+                    <TableColumnHeader><Label>Type</Label></TableColumnHeader>
+                    <TableColumnHeader><Label>Answer</Label></TableColumnHeader>
+                    <TableColumnHeader><Label>Confidence</Label></TableColumnHeader>
+                    <TableColumnHeader><Label>Probabilities</Label></TableColumnHeader>
+                </TableHeaders>
+                <TableRowEntries>
+                    <TableRowEntry>
+                        <TableColumnItems>
+                            <TableColumnItem><PropertyName>Question</PropertyName></TableColumnItem>
+                            <TableColumnItem><PropertyName>Type</PropertyName></TableColumnItem>
+                            <TableColumnItem>
+                                <ScriptBlock>if ($_.Answer -is [double] -or $_.Answer -is [decimal]) { $_.Answer.ToString('0.###') } else { $_.Answer }</ScriptBlock>
+                            </TableColumnItem>
+                            <TableColumnItem>
+                                <ScriptBlock>if ($null -ne $_.Confidence) { ([double]$_.Confidence).ToString('0.###') }</ScriptBlock>
+                            </TableColumnItem>
+                            <TableColumnItem><PropertyName>Probabilities</PropertyName></TableColumnItem>
+                        </TableColumnItems>
+                    </TableRowEntry>
+                </TableRowEntries>
+            </TableControl>
+        </View>
+    </ViewDefinitions>
+</Configuration>

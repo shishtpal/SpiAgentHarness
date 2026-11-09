@@ -1,0 +1,80 @@
+{
+  "format_version": 1,
+  "handler": "questions",
+  "tool": {
+    "function": {
+      "description": "Evaluate evidence using named choice, noul (predicate probability), or score questions with a configured decision model. Does not execute selected actions.",
+      "name": "decision",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "type": [
+              "string",
+              "object",
+              "array"
+            ]
+          },
+          "questions": {
+            "description": "Named questions: type, instructions, criteria. Choice uses a label-to-description object; noul uses true/false descriptions; score uses an ordered description array.",
+            "minProperties": 1,
+            "type": "object"
+          },
+          "attachments": {
+            "description": "Optional image files within the working directory; requires an image-capable profile.",
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "state",
+          "questions"
+        ],
+        "type": "object"
+      }
+    },
+    "type": "function"
+  },
+  "config": {
+    "profiles": {
+      "luna": {
+        "provider": "ExperientialLabs",
+        "model": "gpt-6-luna-decisions",
+        "protocol": "openai_decisions",
+        "endpoint": "https://api.experientiallabs.ai/v1/decisions",
+        "key_env_var": "EXPLABS_API_KEY",
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "schema_status": "adapter_implemented_pending_live_verification",
+        "references": [
+          "https://platform.experientiallabs.ai/models/gpt-6-luna-decisions"
+        ]
+      },
+      "clef": {
+        "provider": "ExperientialLabs",
+        "model": "clef",
+        "protocol": "systemone",
+        "endpoint": "https://api.experientiallabs.ai/v1/systemone",
+        "key_env_var": "EXPLABS_API_KEY",
+        "input_modalities": [
+          "text"
+        ],
+        "schema_status": "native_systemone_adapter_pending_live_verification",
+        "references": [
+          "https://platform.experientiallabs.ai/models/clef"
+        ]
+      }
+    },
+    "request": {
+      "timeout_sec": 30,
+      "max_retries": 0,
+      "automatic_model_fallback": false
+    },
+    "active_profile": "luna"
+  }
+}

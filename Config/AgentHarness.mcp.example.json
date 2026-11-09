@@ -1,0 +1,15 @@
+{
+    "mcpServers": {
+        "browser": {
+            "command": "D:/Codings/lang-Go/browser-server/bin/bs-mcp.exe",
+            "args": [
+                "--config",
+                "D:/Codings/lang-Go/browser-server/bin/confs/bs-ai-config.json",
+                "--working-dir",
+                "D:/Codings/lang-Go/browser-server"
+            ],
+            "allowedTools": ["search_tool", "call_tool"],
+            "autoApproveTools": []
+        }
+    }
+}
