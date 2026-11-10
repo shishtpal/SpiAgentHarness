@@ -49,6 +49,9 @@
     * After each final answer, asks whether to continue or stop. Continuing retains
       user messages and the latest final answer, clearing previous tool interactions.
       Use -NoCompletionPrompt to return immediately after the answer.
+    * Save explicitly with /save-context raw|pruned|summary <path> at that prompt,
+      or -SaveContextPath with -ContextMode. Resume with -ContextPath and a new prompt.
+      Raw history is retained in memory across continuations; no automatic context saves.
 
     Get-AgentHarnessProviderConfig reads the existing provider registry
     ($script:FreeModelProviders). Model selection, menus and logging reuse module commands.
@@ -78,6 +81,22 @@
     Disable automatic local input recording under WorkingDirectory/.agents/prompts.
     By default, each invocation appends original prompts and interactive replies to
     its own UTF-8 JSONL file. Attachment contents and prior History are not recorded.
+
+.PARAMETER ContextPath
+    Load a versioned JSON context file instead of History. Current instructions,
+    tools and connection settings are rebuilt. Provider/model hints are defaults;
+    explicit selections override them. Saved tools are historical data, never replayed.
+
+.PARAMETER SaveContextPath
+    Explicitly save context after the final completed task, including with
+    NoCompletionPrompt. Relative paths resolve against WorkingDirectory. Existing
+    files are replaced atomically; paths containing links are rejected. No save
+    occurs on provider failure or iteration exhaustion.
+
+.PARAMETER ContextMode
+    Export Raw (default), Pruned (all user messages and latest final answer), or
+    Summary (generated handoff plus latest user message and answer). Summary makes
+    a separate tool-free request to the current model. Requires SaveContextPath.
 
 .PARAMETER McpServers
     Hashtable mapping server names to explicit configuration hashtables. Use Command
@@ -211,6 +230,9 @@ function Invoke-AgentHarness {
         [string[]]$Skill,                  # explicitly preload named skills on each task
         [switch]$NoSkills,                 # disable folder discovery and skill tools
         [object[]]$History,                # transcript from a previous -PassThru run
+        [ValidateNotNullOrEmpty()][string]$ContextPath,
+        [ValidateNotNullOrEmpty()][string]$SaveContextPath,
+        [ValidateSet('Raw', 'Pruned', 'Summary')][string]$ContextMode = 'Raw',
         [ValidateRange(1, [int]::MaxValue)][int]$MaxIterations = 100,
         [switch]$NoCompletionPrompt,       # return after one task without asking what next
         [switch]$NoPromptHistory,          # disable local prompt/reply journal
@@ -242,6 +264,12 @@ function Invoke-AgentHarness {
     # Clipboard and other line-oriented commands can return an array of strings.
     $promptText = $Prompt -join [Environment]::NewLine
     if ([string]::IsNullOrEmpty($promptText)) { throw 'Prompt cannot be empty.' }
+    if ($PSBoundParameters.ContainsKey('ContextPath') -and $PSBoundParameters.ContainsKey('History')) {
+        throw 'Specify either ContextPath or History, not both.'
+    }
+    if ($PSBoundParameters.ContainsKey('ContextMode') -and -not $PSBoundParameters.ContainsKey('SaveContextPath')) {
+        throw 'ContextMode requires SaveContextPath.'
+    }
     if ($PSBoundParameters.ContainsKey('McpConfigPath') -and $PSBoundParameters.ContainsKey('McpServers')) {
         throw 'Specify either McpConfigPath or McpServers, not both.'
     }
@@ -286,10 +314,24 @@ function Invoke-AgentHarness {
             TimeoutSec = $TimeoutSec; NoPromptSound = [bool]$NoPromptSound
         }
         SubAgentApiKey  = $ApiKey
+        ContextSessionId = [guid]::NewGuid().ToString('N')
+        ContextPromptTokens = 0
+        ContextCompletionTokens = 0
     }
 
+    if ($ContextPath) {
+        $savedContext = Read-AgentHarnessContext -Root $ctx.Root -Path $ContextPath
+        $History = $savedContext.messages
+        $ctx.ParentContextSessionId = $savedContext.sessionId
+        if (-not $PSBoundParameters.ContainsKey('Provider')) { $Provider = $savedContext.provider }
+        if (-not $PSBoundParameters.ContainsKey('Model') -and -not $Pick -and -not $PSBoundParameters.ContainsKey('ModelFilter') -and $Provider -eq $savedContext.provider) {
+            $Model = $savedContext.model
+        }
+    }
+    if ($SaveContextPath) { $null = Resolve-AgentHarnessContextPath -Root $ctx.Root -Path $SaveContextPath }
+
     if (-not $NoPromptHistory) {
-        $sessionId = [guid]::NewGuid().ToString('N')
+        $sessionId = $ctx.ContextSessionId
         $stamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')
         $ctx.PromptHistory = @{
             SessionId = $sessionId; RelativePath = ".agents/prompts/$stamp-$sessionId.jsonl"
@@ -323,6 +365,9 @@ function Invoke-AgentHarness {
         -AdditionalInstructions $Instructions -NoAgentsFile:$NoAgentsFile -SkillState $ctx.SkillState
     $messages = New-AgentHarnessMessages -SystemPrompt $systemPrompt -Prompt $promptText -History $History `
         -Attachments $Attachments -WorkingDirectory $ctx.Root
+    # Keep history before continuation pruning; only explicit saves write it to disk.
+    $rawMessages = [Collections.Generic.List[object]]::new()
+    $rawMessages.AddRange($messages.ToArray())
 
     $candidates = [Collections.Generic.List[object]]::new()
     $candidates.AddRange([object[]]@(Get-AgentHarnessCandidates -Provider $Provider -Model $Model `
@@ -384,11 +429,34 @@ function Invoke-AgentHarness {
             if (-not $calls.Count) {
                 $final = $text
                 $messages.Add(@{ role = 'assistant'; content = $text })
+                $rawMessages.Add($messages[-1])
                 if ($NoCompletionPrompt) { break }
                 $retryPrompt = $false
                 while ($true) {
                     $nextPrompt = Read-AgentHarnessNextPrompt -Answer $final -NoPromptSound:$NoPromptSound -SkipAnswer:$retryPrompt -Context $ctx
                     if ([string]::IsNullOrWhiteSpace($nextPrompt)) { break }
+                    if ($nextPrompt.TrimStart() -match '^/save-context(?:\s|$)') {
+                        try {
+                            if ($nextPrompt -notmatch '^\s*/save-context\s+(raw|pruned|summary)\s+(.+?)\s*$') {
+                                throw 'Invalid save command.'
+                            }
+                            $saveMode = $Matches[1]
+                            $savePath = $Matches[2]
+                            if ($savePath[0] -in @([char]34, [char]39)) {
+                                if ($savePath.Length -lt 3 -or $savePath[-1] -ne $savePath[0]) { throw 'Invalid quoted context path.' }
+                                $savePath = $savePath.Substring(1, $savePath.Length - 2)
+                            }
+                            $savedPath = Write-AgentHarnessContext -Path $savePath -Mode $saveMode -Messages $rawMessages.ToArray() `
+                                -Context $ctx -Provider $used.Provider -Model $used.Id -ChatUri $ChatUri -ApiKey $ApiKey -TimeoutSec $TimeoutSec -Log $log
+                            Write-AgentHarnessBlock -Title 'Context saved' -Text $savedPath
+                        }
+                        catch {
+                            # Provider errors may contain sensitive response bodies; never echo them here.
+                            Write-AgentHarnessBlock -Title 'Context save failed' -Color Yellow -Text 'No new context was saved. Use /save-context raw|pruned|summary <path>. Check the path, file permissions and 64 MiB limit; summary mode also requires valid handoff JSON from the model. You can retry or continue.'
+                        }
+                        $retryPrompt = $true
+                        continue
+                    }
 
                     try {
                         Update-AgentHarnessSkills -State $ctx.SkillState
@@ -406,6 +474,8 @@ function Invoke-AgentHarness {
                 if ([string]::IsNullOrWhiteSpace($nextPrompt)) { break }
 
                 $messages = $nextMessages
+                $rawMessages[0] = $messages[0]
+                $rawMessages.Add($messages[-1])
                 $state.Candidates.Clear()
                 $state.Candidates.Add($used)
                 $state.Attempts = 0
@@ -417,6 +487,7 @@ function Invoke-AgentHarness {
             if ($text) { & $log "   assistant: $text" 'Gray' }
 
             $messages.Add(@{ role = 'assistant'; content = ($text ? $text : $null); tool_calls = $calls })
+            $rawMessages.Add($messages[-1])
             foreach ($call in $calls) {
                 if ($ctx.ApprovalFeedback) {
                     # Resolve every tool-call ID before adding the user's new instructions.
@@ -430,6 +501,7 @@ function Invoke-AgentHarness {
                         -MaxOutputChars $MaxToolOutputChars
                 }
                 $messages.Add($result)
+                $rawMessages.Add($result)
             }
             if ($ctx.SkillPromptDirty) {
                 $messages[0].content = Get-AgentHarnessSystemPrompt -WorkingDirectory $ctx.Root `
@@ -438,10 +510,20 @@ function Invoke-AgentHarness {
             }
             if ($ctx.ApprovalFeedback) {
                 $messages.Add(@{ role = 'user'; content = $ctx.ApprovalFeedback })
+                $rawMessages.Add($messages[-1])
                 $ctx.ApprovalFeedback = $null
             }
         }
+        if ($SaveContextPath -and $null -ne $final) {
+            try {
+                $null = Write-AgentHarnessContext -Path $SaveContextPath -Mode $ContextMode -Messages $rawMessages.ToArray() `
+                    -Context $ctx -Provider $used.Provider -Model $used.Id -ChatUri $ChatUri -ApiKey $ApiKey -TimeoutSec $TimeoutSec -Log $log
+            }
+            catch { throw 'Context save failed. Check the path, file permissions and size; summary mode requires valid handoff JSON from the model. Any previous context file was preserved.' }
+        }
         $totalTimer.Stop()
+        $tokIn += $ctx.ContextPromptTokens
+        $tokOut += $ctx.ContextCompletionTokens
 
         if ($null -eq $final) {
             Write-Warning "Stopped after $MaxIterations iterations without a final answer."
@@ -460,6 +542,8 @@ function Invoke-AgentHarness {
                 PromptTokens      = $tokIn
                 CompletionTokens  = $tokOut
                 Messages          = $messages.ToArray()
+                RawMessages       = $rawMessages.ToArray()
+                ContextPath       = $ctx.SavedContextPath
                 PromptHistoryPath = $(if ($ctx.PromptHistory) { $ctx.PromptHistory.Path })
             }
         }

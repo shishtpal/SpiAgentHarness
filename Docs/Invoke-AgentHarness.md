@@ -89,6 +89,7 @@ Invoke-AgentHarness
     [-Provider <string>] [-Model <string>] [-ModelFilter <string>] [-Pick] [-All] [-MaxModelAttempts <int>] [-NoModelRecovery]
     [-ChatUri <string>] [-ApiKey <string>] [-TimeoutSec <int>] [-Temperature <double>]
     [-Instructions <string>] [-NoAgentsFile] [-History <object[]>] [-MaxIterations <int>] [-NoCompletionPrompt]
+    [-ContextPath <string>] [-SaveContextPath <string>] [-ContextMode Raw|Pruned|Summary]
     [-SkillPath <string[]>] [-GlobalSkillPath <string>] [-Skill <string[]>] [-NoSkills]
     [-Tools <hashtable>] [-McpServers <hashtable>] [-McpConfigPath <string>] [-McpServer <string[]>] [-NoBuiltinTools] [-AllowWrite] [-NoShellTool] [-YOLO]
     [-WorkingDirectory <string>] [-MaxToolOutputChars <int>]
@@ -138,6 +139,9 @@ Invoke-AgentHarness
 | `-Skill` | none | Exact skill names to preload into the system instructions on every task. |
 | `-NoSkills` | off | Disable skill discovery, catalog and tools. `-NoBuiltinTools` also disables skills. Explicit `-Skill` selections cannot be combined with either switch. |
 | `-History` | none | Transcript from a previous `-PassThru` run (`.Messages`). Enables multi-turn use. |
+| `-ContextPath` | none | Load an explicitly saved JSON conversation instead of `-History`. Current instructions and tools are rebuilt. |
+| `-SaveContextPath` | none | Explicitly save after the last completed task, including with `-NoCompletionPrompt`. No context file is written without a save request. |
+| `-ContextMode` | `Raw` | `Raw`, `Pruned`, or `Summary`; requires `-SaveContextPath`. Summary makes a separate request to the current model. |
 | `-MaxIterations` | `100` | Maximum model turns per task. Continuing starts a fresh turn budget. If reached without a final answer, a warning is written and an empty string is returned without a completion prompt. |
 | `-NoCompletionPrompt` | off | Return after the first task without asking whether to continue. For unattended runs, also disable recovery and the interactive choice tool (see below). |
 
@@ -401,7 +405,8 @@ Recovery menus still appear with `-Quiet` or `-YOLO`. Use `-NoModelRecovery` to 
 Whenever the model returns an answer without tool calls, the harness displays the answer and asks `Continue with another task or stop? [exit]`. Type your next task directly at this prompt. This checkpoint is controlled by the harness and works even with `-NoBuiltinTools`; the model does not need to call a completion tool.
 
 - Enter the next task, for example `What is this project about?`. The harness keeps all user messages in order and only the most recent final assistant answer. Earlier assistant messages, tool requests and tool results are removed before sending the next task.
-- Enter `exit` or a blank response to return the last answer. The `exit` command is case insensitive and ignores surrounding whitespace; it is never sent to the model. All other nonblank input is treated as the next task, including `c`, `continue`, `s` and `stop`.
+- Enter `exit` or a blank response to return the last answer. The `exit` command is case insensitive and ignores surrounding whitespace; it is never sent to the model.
+- Enter `/save-context raw|pruned|summary <path>` to save and return to this prompt. Save commands are handled locally; all other nonblank input is treated as the next task, including `c`, `continue`, `s` and `stop`.
 
 Continuation refreshes the system prompt and `AGENTS.md`, preserves `-Instructions`, and keeps the current model, connection overrides and tool settings. Each task receives its own `-MaxIterations` budget; returned iteration and token totals cover the entire invocation. File changes and other completed tool side effects remain in place.
 
@@ -790,6 +795,48 @@ Details:
 
 ---
 
+## Saving and loading conversation context
+
+Context saves are explicit. At the completion prompt, enter one of:
+
+```text
+/save-context raw .agent-harness/sessions/work.raw.json
+/save-context pruned .agent-harness/sessions/work.pruned.json
+/save-context summary ".agent-harness/sessions/work summary.json"
+```
+
+Each command saves and returns to the completion prompt without adding a conversation message or changing the active history. Paths are literal, relative to `WorkingDirectory` or absolute; single or double outer quotes are supported for spaces. These commands also work in `-Quiet`, `-YOLO`, and `-NoBuiltinTools` mode. Failed saves let you retry, choose another mode, continue, or exit. With prompt recording enabled, the command is recorded as a `context_save_command` event rather than a continuation task.
+
+For a single task or unattended run, request a save through parameters:
+
+```powershell
+Invoke-AgentHarness 'Review the tests' -Provider Kilo -Pick `
+    -SaveContextPath '.agent-harness/sessions/review.json' -ContextMode Raw `
+    -NoCompletionPrompt
+
+# A later invocation; supply current tool, skill and connection options as needed.
+Invoke-AgentHarness 'Continue the unfinished work; verify current files first' `
+    -ContextPath '.agent-harness/sessions/review.json' -NoCompletionPrompt
+```
+
+`-SaveContextPath` saves after the last completed task of the invocation. It does not save on provider failure or iteration exhaustion. A save failure throws a sanitized error and leaves an existing checkpoint intact. `-ContextMode` requires `-SaveContextPath` and defaults to `Raw`. There are no automatic context checkpoint writes; the independent input journal described below retains its existing defaults.
+
+| Mode | Saved content | Tradeoffs |
+|---|---|---|
+| `Raw` | All available user, assistant and completed tool messages, inline attachments, and the current system prompt snapshot. | No model request for saving. In-memory history survives continuation pruning, but files and future requests can be large. Earlier discarded history and tool-output truncation cannot be undone. Hidden model state and older system-prompt revisions are not captured. |
+| `Pruned` | All user messages and the latest final answer, plus the current system snapshot. | Deterministic and local; matches existing continuation pruning. Earlier assistant/tool evidence is removed. User attachments remain inline and can still dominate size. |
+| `Summary` | A generated handoff covering goal, constraints, decisions, completed work, verification, unfinished work and next steps, plus the latest user message and final answer. | Makes an additional tool-free request to the current model using the raw archive and current connection credentials. The handoff can omit details; older attachment bytes are omitted. Provider input limits still apply to summarization. |
+
+Summary export does not replace the running conversation. Its token usage is included in `PromptTokens` and `CompletionTokens` when reported, including a summary response rejected as invalid. Summary requests use the existing transport retries but do not open recovery menus, execute tools or retry through another model. Invalid handoffs are not saved. Raw and pruned exports make no provider request.
+
+Files are versioned UTF-8 JSON, limited to 64 MiB, and replaced through a flushed temporary file in the same directory. Existing symbolic links and junctions in context paths are refused. Explicit saves create missing parent directories. `.agent-harness/` is already ignored by this repository, making it a suitable location for private session files. Saved context can contain attachment copies and sensitive conversation text; connection parameters, headers, credentials and approval settings are not serialized as configuration. Secrets already present in conversation text cannot be automatically removed while preserving a raw transcript.
+
+Loading validates the format, schema version, content arrays and complete tool-call/result pairs before any provider request. JSON arrays, null assistant content for tool calls, argument strings and date-looking text retain their types. Tool arguments must encode JSON objects. Context is restored as conversation data; historical tools are never executed. Summary text is a user-level reference message beneath current system instructions.
+
+`-ContextPath` cannot be combined with `-History`. Saved provider/model names are defaults: explicit `-Provider` and `-Model` override them; `-Pick` or an explicit `-ModelFilter` uses fresh discovery. Changing only the provider does not reuse a model hint from a different provider. The saved working directory is informational and never changes the current `WorkingDirectory`. Pass current `-Instructions`, skill selections, custom tools, MCP activation, endpoint overrides, and credentials again as needed. A custom endpoint is not saved, so a custom-provider resume needs its current `-ChatUri`. Current approval settings apply; saved grants and process state are not restored. Reinspect files and external state before continuing work.
+
+The raw archive starts with the history available to the current invocation. Resuming a pruned or summary file cannot reconstruct what that file omitted. Context files are completed-answer checkpoints, not crash recovery for actions interrupted mid-execution.
+
 ## Local prompt history
 
 Each invocation automatically appends user input to its own UTF-8 JSON Lines file under `WorkingDirectory/.agents/prompts/<UTC-timestamp>-<session-id>.jsonl`. Recording happens when input is received, before attachment processing or provider requests, so failed requests and invalid continuation prompts remain recorded. Multiline text, Unicode, whitespace and inline attachment markers are preserved; each event occupies one JSON line.
@@ -828,6 +875,8 @@ With `-PassThru`, an object:
 | `Iterations` | Number of model turns taken. |
 | `PromptTokens` / `CompletionTokens` | Summed token usage, when the provider reports it. |
 | `Messages` | The current transcript as an array, suitable for `-History`. After continuation, this includes retained user messages and the preceding final answer, plus the current task's messages and tool interactions. |
+| `RawMessages` | Available transcript before continuation pruning, including earlier assistant/tool messages. Retained in memory; suitable for `-History` when a larger context is wanted. |
+| `ContextPath` | Absolute path of the last successfully saved context in this invocation, or `$null` if none was saved. |
 | `PromptHistoryPath` | Absolute path to this invocation's local input journal, or `$null` if recording was disabled or no entry could be saved. |
 
 ### Multi-turn conversations

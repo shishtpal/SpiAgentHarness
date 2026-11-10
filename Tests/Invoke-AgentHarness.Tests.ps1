@@ -1,7 +1,7 @@
 #requires -Version 7.0
 # Run with: pwsh -NoProfile -File ./Tests/Invoke-AgentHarness.Tests.ps1
 # Import the real standalone manifest and loader from a fixture without user configuration or skills.
-param([switch]$DecisionToolsOnly, [switch]$SearchFilesOnly, [switch]$PromptHistoryOnly)
+param([switch]$DecisionToolsOnly, [switch]$SearchFilesOnly, [switch]$PromptHistoryOnly, [switch]$ContextOnly)
 
 $ErrorActionPreference = 'Stop'
 # Test dependencies must never auto-load a user-installed legacy module.
@@ -235,6 +235,11 @@ try {
     }
 
     $basic = @{ Model = 'custom-model'; ChatUri = 'https://provider.invalid/chat'; Quiet = $true; NoBuiltinTools = $true; WorkingDirectory = $fixture; NoModelRecovery = $true }
+    if ($ContextOnly) {
+        . (Join-Path $PSScriptRoot 'AgentHarness.Context.Tests.ps1')
+        Write-Host "Passed $checks context fixture checks. Synthetic inputs and mocked providers only."
+        return
+    }
     if ($PromptHistoryOnly) {
         . (Join-Path $PSScriptRoot 'AgentHarness.PromptHistory.Tests.ps1')
         Write-Host "Passed $checks prompt-history fixture checks. Synthetic inputs and mocked providers only."
@@ -1576,6 +1581,7 @@ exit 7
     . (Join-Path $PSScriptRoot 'AgentHarness.Mcp.Tests.ps1')
     . (Join-Path $PSScriptRoot 'AgentHarness.Decisions.Tests.ps1')
     . (Join-Path $PSScriptRoot 'AgentHarness.PromptHistory.Tests.ps1')
+    . (Join-Path $PSScriptRoot 'AgentHarness.Context.Tests.ps1')
 
     Write-Host "Passed $checks checks. No Initialize.ps1 access or live API requests."
 }

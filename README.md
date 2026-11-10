@@ -24,6 +24,8 @@ Global skills default to `.agents/skills` beneath the installed module. MCP conf
 
 User prompts and interactive replies are saved automatically to one JSONL file per invocation under the working directory's `.agents/prompts/`. Use `-NoPromptHistory` to disable recording, or `-PassThru` to obtain `PromptHistoryPath`. Attachment contents are excluded. See [local prompt history](Docs/Invoke-AgentHarness.md#local-prompt-history).
 
+Save conversation context explicitly with `/save-context raw|pruned|summary <path>` at the completion prompt, or `-SaveContextPath <path> -ContextMode Raw|Pruned|Summary`. Resume later with `-ContextPath <path>` and a new prompt. Raw and pruned saves are local; summary saves make an additional model request. See [saving and loading context](Docs/Invoke-AgentHarness.md#saving-and-loading-conversation-context).
+
 [REA integration](Docs/REA.md) uses an already installed local CLI for static JavaScript/Electron and managed .NET inspection, with a scoped MCP allowlist, a module-owned workflow and an opt-in synthetic smoke test. It installs no software.
 
 Verify with mocked providers and synthetic files:

@@ -19,7 +19,7 @@ function Read-AgentHarnessNextPrompt {
     $prompt = Read-Host 'Continue with another task or stop? [exit]'
     if ($null -ne $prompt -and $Context) {
         $isStop = [string]::IsNullOrWhiteSpace($prompt) -or $prompt.Trim() -eq 'exit'
-        $type = if ($isStop) { 'stop_reply' } else { 'continuation_prompt' }
+        $type = if ($isStop) { 'stop_reply' } elseif ($prompt.TrimStart() -match '^/save-context(?:\s|$)') { 'context_save_command' } else { 'continuation_prompt' }
         Write-AgentHarnessPromptHistory -Context $Context -Type $type -Text $prompt
     }
 
