@@ -87,8 +87,8 @@ Invoke-AgentHarness
     [-Prompt] <string[]>
     [-Attachments <string[]>]
     [-Provider <string>] [-Model <string>] [-ModelFilter <string>] [-Pick] [-All] [-MaxModelAttempts <int>] [-NoModelRecovery]
-    [-ChatUri <string>] [-ApiKey <string>] [-TimeoutSec <int>] [-Temperature <double>]
-    [-Instructions <string>] [-NoAgentsFile] [-History <object[]>] [-MaxIterations <int>] [-NoCompletionPrompt]
+    [-ChatUri <string>] [-ApiKey <string>] [-PretendAgent Codex|ClaudeCode|OpenCode|Kilo|Cline] [-TimeoutSec <int>] [-Temperature <double>]
+    [-Instructions <string>] [-AgentProfile Default|Codex|ClaudeCode|OpenCode|Kilo|Cline] [-NoAgentsFile] [-History <object[]>] [-MaxIterations <int>] [-NoCompletionPrompt]
     [-ContextPath <string>] [-SaveContextPath <string>] [-ContextMode Raw|Pruned|Summary]
     [-SkillPath <string[]>] [-GlobalSkillPath <string>] [-Skill <string[]>] [-NoSkills]
     [-Tools <hashtable>] [-McpServers <hashtable>] [-McpConfigPath <string>] [-McpServer <string[]>] [-NoBuiltinTools] [-AllowWrite] [-NoShellTool] [-YOLO]
@@ -125,14 +125,35 @@ Invoke-AgentHarness
 |---|---|---|
 | `-ChatUri` | from registry | Full chat completions URL. Overrides the registry. |
 | `-ApiKey` | from registry env var | Bearer token. Overrides the environment variable named in the registry. |
+| `-PretendAgent` | none | Explicit experimental app attribution override: `Codex`, `ClaudeCode`, `OpenCode`, `Kilo`, or `Cline`. Applies to chat requests, retries, recovery, continuations, summaries and child agents. Supplies the persona name when no non-default `-AgentProfile` is selected. |
 | `-TimeoutSec` | `120` | Per-request timeout. |
 | `-Temperature` | not sent | Sampling temperature. Only included in the request when specified. |
+
+`-PretendAgent` sets the [OpenRouter app attribution headers](https://openrouter.ai/docs/app-attribution): `HTTP-Referer`, `X-OpenRouter-Title` and its legacy alias `X-Title`. It applies to the selected chat endpoint, including custom endpoints, and supplies the fallback persona name in the system prompt and session banner. It does not change authentication, model selection, tools or request protocols, and does not guarantee access to restricted free endpoints. No live eligibility test has been performed. The choice is invocation-scoped: saved context does not restore it; pass it again when resuming.
+
+```powershell
+Invoke-AgentHarness 'Say hi' -Provider OpenRouter `
+    -Model 'thinkingmachines/inkling-2-small:free' -PretendAgent OpenCode `
+    -NoCompletionPrompt -NoModelRecovery
+```
+
+| Preset | `HTTP-Referer` | App title |
+|---|---|---|
+| `Codex` | `https://openai.com/codex/` | `Codex` |
+| `ClaudeCode` | `https://claude.ai/code` | `Claude Code` |
+| `OpenCode` | `https://opencode.ai/` | `opencode` |
+| `Kilo` | `https://kilo.ai/` | `Kilo Code` |
+| `Cline` | `https://cline.bot` | `Cline` |
+
+These are attribution presets, not verified reproductions of each client's complete headers. The OpenCode referer and title match its [OpenRouter provider source](https://github.com/anomalyco/opencode/blob/dev/packages/core/src/plugin/provider/openrouter.ts).
+The Kilo and Cline referers and titles match their [Kilo provider source](https://github.com/Kilo-Org/kilocode/blob/main/packages/opencode/src/provider/provider.ts) and [Cline request header defaults](https://github.com/cline/cline/blob/main/sdk/packages/llms/src/providers/request-headers.ts).
 
 ### Conversation
 
 | Parameter | Default | Description |
 |---|---|---|
 | `-Instructions` | none | Additional instructions appended to the default system prompt, after repository instructions. `-AdditionalInstructions` and `-SystemPrompt` are aliases; `-SystemPrompt` now appends instead of replacing the default. |
+| `-AgentProfile` | `Default` | Adapted working style: `Default`, `Codex`, `ClaudeCode`, `OpenCode`, `Kilo`, or `Cline`. Supplements the harness rules; independent of `-PretendAgent` attribution. Children inherit it; pass it again on context resumption. See [Agent behavior profiles](AgentProfiles.md) for source provenance and runtime adaptations. |
 | `-NoAgentsFile` | off | Disable automatic loading of `AGENTS.md` from the working directory. |
 | `-SkillPath` | none | Additional skill roots. Relative paths resolve against `WorkingDirectory`; every explicit root must exist. See [Folder skills](#folder-skills). |
 | `-GlobalSkillPath` | `<module>/.agents/skills` | Optional shared global skill root. Here it resolves to `D:\SchoolPi\SpiAgentHarness\.agents\skills`. Pass `''` to disable this root. `-UserSkillPath` is an alias. |
@@ -870,6 +891,7 @@ With `-PassThru`, an object:
 | Property | Description |
 |---|---|
 | `Answer` | Final answer text. |
+| `PersonaName` | Effective name in the system-prompt introduction and banner: non-default `AgentProfile`, then `PretendAgent`, then `SpiAgentHarness`. |
 | `Provider` | Provider name of the model that was used. |
 | `Model` | Model id that was used. |
 | `Iterations` | Number of model turns taken. |

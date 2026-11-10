@@ -82,6 +82,23 @@
     By default, each invocation appends original prompts and interactive replies to
     its own UTF-8 JSONL file. Attachment contents and prior History are not recorded.
 
+.PARAMETER PretendAgent
+    Explicit experimental app attribution override: Codex, ClaudeCode, OpenCode,
+    Kilo or Cline.
+    Sends HTTP-Referer, X-Title and X-OpenRouter-Title on chat and summary requests.
+    Children inherit the choice. Does not emulate agent protocols or guarantee
+    eligibility for restricted models. Omit to send no app attribution override.
+    Also supplies the persona name when no non-default AgentProfile is selected.
+
+.PARAMETER AgentProfile
+    Optional adapted working style: Default, Codex, ClaudeCode, OpenCode, Kilo or
+    Cline. Default retains standard working guidance. Profiles supplement harness rules
+    and use this harness's tools, approvals and PowerShell execution model.
+    Independent of PretendAgent attribution headers. Children inherit the choice;
+    pass it again when resuming saved context. No upstream prompt is fetched at runtime.
+    Persona name and banner use AgentProfile first, then PretendAgent, then
+    SpiAgentHarness. The actual PowerShell runtime remains explicit in the prompt.
+
 .PARAMETER ContextPath
     Load a versioned JSON context file instead of History. Current instructions,
     tools and connection settings are rebuilt. Provider/model hints are defaults;
@@ -218,12 +235,14 @@ function Invoke-AgentHarness {
         # --- connection overrides -------------------------------------------
         [string]$ChatUri,
         [string]$ApiKey,
+        [ValidateSet('Codex', 'ClaudeCode', 'OpenCode', 'Kilo', 'Cline')][string]$PretendAgent,
         [ValidateRange(1, [int]::MaxValue)][int]$TimeoutSec = 120,
         [Nullable[double]]$Temperature,
 
         # --- conversation ---------------------------------------------------
         [Alias('Attachment', 'AttachmentPath')][string[]]$Attachments,
         [Alias('SystemPrompt', 'AdditionalInstructions')][string]$Instructions,
+        [ValidateSet('Default', 'Codex', 'ClaudeCode', 'OpenCode', 'Kilo', 'Cline')][string]$AgentProfile = 'Default',
         [switch]$NoAgentsFile,             # skip automatic AGENTS.md loading
         [string[]]$SkillPath,              # additional skill roots, relative to WorkingDirectory
         [Alias('UserSkillPath')][AllowEmptyString()][string]$GlobalSkillPath,
@@ -296,7 +315,9 @@ function Invoke-AgentHarness {
         $GlobalSkillPath = if ($NoSkills -or $NoBuiltinTools) { '' } else { Get-AgentHarnessDefaultSkillPath }
     }
 
+    $personaName = Get-AgentHarnessPersonaName -AgentProfile $AgentProfile -PretendAgent $PretendAgent
     $ctx = @{
+        PersonaName     = $personaName
         Root            = (Resolve-Path -LiteralPath $WorkingDirectory -ErrorAction Stop).ProviderPath
         YOLO            = [bool]$YOLO
         AutoApprove     = [bool]$YOLO # Compatibility for existing custom tools.
@@ -308,16 +329,20 @@ function Invoke-AgentHarness {
         SubAgents       = [Collections.Generic.List[string]]::new()
         SubAgentOptions = @{
             Instructions = $Instructions; NoAgentsFile = [bool]$NoAgentsFile
+            AgentProfile = $AgentProfile
             NoSkills = [bool]($NoSkills -or $NoBuiltinTools)
             GlobalSkillPath = $GlobalSkillPath
             MaxIterations = $MaxIterations; MaxToolOutputChars = $MaxToolOutputChars
             TimeoutSec = $TimeoutSec; NoPromptSound = [bool]$NoPromptSound
         }
         SubAgentApiKey  = $ApiKey
+        ChatHeaders    = Get-AgentHarnessIdentityHeaders -PretendAgent $PretendAgent
         ContextSessionId = [guid]::NewGuid().ToString('N')
         ContextPromptTokens = 0
         ContextCompletionTokens = 0
     }
+
+    if ($PretendAgent) { $ctx.SubAgentOptions.PretendAgent = $PretendAgent }
 
     if ($ContextPath) {
         $savedContext = Read-AgentHarnessContext -Root $ctx.Root -Path $ContextPath
@@ -362,7 +387,7 @@ function Invoke-AgentHarness {
     }
 
     $systemPrompt = Get-AgentHarnessSystemPrompt -WorkingDirectory $ctx.Root `
-        -AdditionalInstructions $Instructions -NoAgentsFile:$NoAgentsFile -SkillState $ctx.SkillState
+        -AdditionalInstructions $Instructions -NoAgentsFile:$NoAgentsFile -SkillState $ctx.SkillState -AgentProfile $AgentProfile -PretendAgent $PretendAgent
     $messages = New-AgentHarnessMessages -SystemPrompt $systemPrompt -Prompt $promptText -History $History `
         -Attachments $Attachments -WorkingDirectory $ctx.Root
     # Keep history before continuation pruning; only explicit saves write it to disk.
@@ -383,7 +408,7 @@ function Invoke-AgentHarness {
             Get-AgentHarnessMcpTools -Servers $McpServers -ToolTable $toolTable -Connections $mcpConnections -WorkingDirectory $ctx.Root
         }
         $toolSpecs = @(ConvertTo-AgentHarnessToolSpec -ToolTable $toolTable)
-        & $log '== Agent harness ==' 'Cyan'
+        & $log "== $personaName ==" 'Cyan'
         & $log ("   tools   : " + ($(if ($toolTable.Count) { $toolTable.Keys -join ', ' } else { '(none)' }))) 'DarkGray'
         & $log "   workdir : $($ctx.Root)" 'DarkGray'
         & $log "   prompt  : $(Limit-AgentHarnessText $promptText 200)" 'DarkGray'
@@ -399,6 +424,7 @@ function Invoke-AgentHarness {
             $taskIterations++
             $turn = Invoke-AgentHarnessTurn -State $state -Messages $messages -ToolSpecs $toolSpecs `
                 -ChatUri $ChatUri -ApiKey $ApiKey -TimeoutSec $TimeoutSec -Temperature $Temperature `
+                -RequestHeaders $ctx.ChatHeaders `
                 -MaxModelAttempts $MaxModelAttempts -Iteration $iteration -Log $log -NoModelRecovery:$NoModelRecovery
             $response = $turn.Response
             $used = $turn.Candidate
@@ -461,7 +487,7 @@ function Invoke-AgentHarness {
                     try {
                         Update-AgentHarnessSkills -State $ctx.SkillState
                         $systemPrompt = Get-AgentHarnessSystemPrompt -WorkingDirectory $ctx.Root `
-                            -AdditionalInstructions $Instructions -NoAgentsFile:$NoAgentsFile -SkillState $ctx.SkillState
+                            -AdditionalInstructions $Instructions -NoAgentsFile:$NoAgentsFile -SkillState $ctx.SkillState -AgentProfile $AgentProfile -PretendAgent $PretendAgent
                         $nextMessages = New-AgentHarnessMessages -SystemPrompt $systemPrompt -Prompt $nextPrompt `
                             -History $messages.ToArray() -KeepLatestAnswer -WorkingDirectory $ctx.Root
                         break
@@ -505,7 +531,7 @@ function Invoke-AgentHarness {
             }
             if ($ctx.SkillPromptDirty) {
                 $messages[0].content = Get-AgentHarnessSystemPrompt -WorkingDirectory $ctx.Root `
-                    -AdditionalInstructions $Instructions -NoAgentsFile:$NoAgentsFile -SkillState $ctx.SkillState
+                    -AdditionalInstructions $Instructions -NoAgentsFile:$NoAgentsFile -SkillState $ctx.SkillState -AgentProfile $AgentProfile -PretendAgent $PretendAgent
                 $ctx.SkillPromptDirty = $false
             }
             if ($ctx.ApprovalFeedback) {
@@ -536,6 +562,7 @@ function Invoke-AgentHarness {
         if ($PassThru) {
             [pscustomobject]@{
                 Answer            = $final
+                PersonaName       = $personaName
                 Provider          = $used.Provider
                 Model             = $used.Id
                 Iterations        = $iteration

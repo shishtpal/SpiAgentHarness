@@ -1,7 +1,7 @@
 #requires -Version 7.0
 # Run with: pwsh -NoProfile -File ./Tests/Invoke-AgentHarness.Tests.ps1
 # Import the real standalone manifest and loader from a fixture without user configuration or skills.
-param([switch]$DecisionToolsOnly, [switch]$SearchFilesOnly, [switch]$PromptHistoryOnly, [switch]$ContextOnly)
+param([switch]$DecisionToolsOnly, [switch]$SearchFilesOnly, [switch]$PromptHistoryOnly, [switch]$ContextOnly, [switch]$ProfilesOnly)
 
 $ErrorActionPreference = 'Stop'
 # Test dependencies must never auto-load a user-installed legacy module.
@@ -235,6 +235,11 @@ try {
     }
 
     $basic = @{ Model = 'custom-model'; ChatUri = 'https://provider.invalid/chat'; Quiet = $true; NoBuiltinTools = $true; WorkingDirectory = $fixture; NoModelRecovery = $true }
+    if ($ProfilesOnly) {
+        . (Join-Path $PSScriptRoot 'AgentHarness.Profiles.Tests.ps1')
+        Write-Host "Passed $checks focused profile checks. Isolated fixture and mocked providers."
+        return
+    }
     if ($ContextOnly) {
         . (Join-Path $PSScriptRoot 'AgentHarness.Context.Tests.ps1')
         Write-Host "Passed $checks context fixture checks. Synthetic inputs and mocked providers only."
@@ -255,6 +260,9 @@ try {
     Assert-Harness ($request.Headers.Authorization -eq 'Bearer fake-test-key' -and $request.Body.temperature -eq 0.25 -and $request.Timeout -eq 12) 'Connection overrides'
     Assert-Harness ($null -eq $request.Body.tools -and $info.Count -eq 0) 'No tools and quiet trace'
     Assert-Harness ($request.Body.messages[1].content -is [string] -and $request.Body.messages[1].content -eq 'hello') 'Prompts without attachments remain plain strings'
+
+    . (Join-Path $PSScriptRoot 'AgentHarness.Identity.Tests.ps1')
+    . (Join-Path $PSScriptRoot 'AgentHarness.Profiles.Tests.ps1')
 
     # Simulate clipboard output without reading or changing the user's clipboard.
     $clipboardLines = @('First line', '', 'Unicode: café, नमस्ते', 'Last line')

@@ -1,8 +1,17 @@
 function Invoke-AgentHarnessTurn {
     param(
-        [hashtable]$State, [Collections.Generic.List[object]]$Messages, [object[]]$ToolSpecs,
-        [string]$ChatUri, [string]$ApiKey, [int]$TimeoutSec, [Nullable[double]]$Temperature,
-        [int]$MaxModelAttempts, [int]$Iteration, [scriptblock]$Log, [switch]$NoModelRecovery
+        [hashtable]$State,
+        [Collections.Generic.List[object]]$Messages,
+        [object[]]$ToolSpecs,
+        [string]$ChatUri,
+        [string]$ApiKey,
+        [int]$TimeoutSec,
+        [Nullable[double]]$Temperature,
+        [int]$MaxModelAttempts,
+        [int]$Iteration,
+        [scriptblock]$Log,
+        [switch]$NoModelRecovery,
+        [hashtable]$RequestHeaders
     )
 
     while ($State.Candidates.Count) {
@@ -22,7 +31,7 @@ function Invoke-AgentHarnessTurn {
             }
             if ($null -ne $Temperature) { $body['temperature'] = [double]$Temperature }
             & $Log "[turn $Iteration] -> [$($candidate.Provider)] $($candidate.Id)" 'Cyan'
-            $response = Invoke-AgentHarnessChat -Uri $connection.ChatUri -ApiKey $key -Body $body -TimeoutSec $TimeoutSec -Log $Log
+            $response = Invoke-AgentHarnessChat -Uri $connection.ChatUri -ApiKey $key -Body $body -TimeoutSec $TimeoutSec -Log $Log -RequestHeaders $RequestHeaders
             $State.Locked = $true
             return [pscustomobject]@{
                 Response = $response; Candidate = $candidate; ElapsedMilliseconds = $timer.ElapsedMilliseconds

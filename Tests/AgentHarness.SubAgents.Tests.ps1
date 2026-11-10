@@ -105,12 +105,14 @@ try {
     # Worker runtime reads this synthetic transport from disk; it never calls a live API.
     $syntheticChat = @'
 function Invoke-AgentHarnessChat {
-    param($Uri, $ApiKey, $Body, $TimeoutSec, $Log)
+    param($Uri, $ApiKey, $Body, $TimeoutSec, $Log, $RequestHeaders)
     if ($Uri -ne 'https://provider.invalid/child') { throw 'Unmocked child endpoint.' }
     if ($Body.tools.function.name -contains 'spawn_agent') { throw 'Recursive child spawning was exposed.' }
     if ($ApiKey -ne 'synthetic-child-key-for-environment-only') { throw 'Child key was not inherited.' }
     $taskText = [string](@($Body.messages | Where-Object role -eq user)[0].content)
     $isWiredChild = $taskText -in 'wired-child', 'wired-empty-child'
+    if ($isWiredChild -and $RequestHeaders['X-Title'] -cne 'opencode') { throw 'Child identity headers were not inherited.' }
+    if ($isWiredChild -and -not $Body.messages[0].content.Contains('Adapted agent behavior profile: Cline')) { throw 'Child behavior profile was not inherited.' }
     if (-not $isWiredChild -and $Body.ContainsKey('tool_choice')) { throw 'Provider OmitToolChoice was not inherited.' }
     if ($isWiredChild -and -not $Body.ContainsKey('tool_choice')) { throw 'Default provider tool_choice was not preserved.' }
     if ($taskText -eq 'wired-child' -and -not $Body.messages[0].content.Contains('Synthetic inherited skill guidance.')) { throw 'Child skill options were not inherited.' }
@@ -221,6 +223,7 @@ function Invoke-AgentHarnessChat {
         $launched = Invoke-SubAgentFixtureTool spawn_agent @{ task = 'read-child' } -Context $agentContext
         $failedAgent = ConvertFrom-Json -InputObject $launched.content -AsHashtable
         $failed = Invoke-SubAgentFixtureTool wait_agent @{ agent_id = $failedAgent.Id; timeout_seconds = 30 } -Context $agentContext
+        Assert-Harness ($failed.content -notlike 'ERROR:*') "Initialization failure status is readable: $($failed.content)"
         Assert-Harness ((ConvertFrom-Json -InputObject $failed.content).State -eq 'failed') 'Worker initialization failure publishes a terminal state instead of remaining running indefinitely'
     }
     finally { [IO.File]::WriteAllBytes($runtimeImportPath, $savedRuntimeImport) }
@@ -237,6 +240,8 @@ function Invoke-AgentHarnessChat {
 
     # Exercise public entry-point wiring, not just direct tool helpers.
     $parentOptions = $withBuiltins.Clone(); $parentOptions.WorkingDirectory = $agentRoot
+    $parentOptions.PretendAgent = 'OpenCode'
+    $parentOptions.AgentProfile = 'Cline'
     foreach ($preference in 'Continue', 'Stop') {
         foreach ($selection in @(
             @{ Name = 'omitted'; Options = @{ NoSkills = $false } }
@@ -270,6 +275,8 @@ function Invoke-AgentHarnessChat {
     $wiredChild = ConvertFrom-Json -InputObject $parentTool.content -AsHashtable
     $wiredTask = ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($wiredChild.TaskFile)) -AsHashtable
     Assert-Harness ($parent.Answer -eq 'parent continued' -and $wiredTask.Options.YOLO -and $wiredTask.Options.Model -eq 'synthetic-child-model') 'Public YOLO/model/context are forwarded through the parent tool loop'
+    Assert-Harness ($wiredTask.Options.PretendAgent -ceq 'OpenCode') 'Public identity override is forwarded into the child task file'
+    Assert-Harness ($wiredTask.Options.AgentProfile -ceq 'Cline') 'Public behavior profile is forwarded into the child task file'
     Assert-Harness (-not $wiredTask.Options.NoSkills -and $wiredTask.Options.Skill -contains 'child-guidance' -and [IO.Path]::IsPathRooted($wiredTask.Options.SkillPath[0]) -and $wiredTask.Options.GlobalSkillPath -eq '') 'Child inherits explicit selections, normalized skill roots and disabled global root'
     $wiredCompletion = Invoke-SubAgentFixtureTool wait_agent @{ agent_id = $wiredChild.Id; timeout_seconds = 30 } -Context $agentContext
     Assert-Harness ((ConvertFrom-Json -InputObject $wiredCompletion.content).State -eq 'completed') 'Child launched through public entry point completes using inherited provider settings'

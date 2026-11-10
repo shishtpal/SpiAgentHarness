@@ -2,10 +2,13 @@ function Invoke-AgentHarnessChat {
     # POST one chat/completions request. Retries 429/5xx; throws with .Data['Status'] set.
     param(
         [string]$Uri, [string]$ApiKey, [hashtable]$Body,
-        [int]$TimeoutSec = 120, [scriptblock]$Log
+        [int]$TimeoutSec = 120, [scriptblock]$Log, [hashtable]$RequestHeaders
     )
 
     $headers = @{}
+    if ($RequestHeaders) {
+        foreach ($name in $RequestHeaders.Keys) { $headers[$name] = $RequestHeaders[$name] }
+    }
     if ($ApiKey) { $headers['Authorization'] = "Bearer $ApiKey" }
     $json = $Body | ConvertTo-Json -Depth 30 -Compress
     $delay = 2

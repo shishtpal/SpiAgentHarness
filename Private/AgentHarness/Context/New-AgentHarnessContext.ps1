@@ -31,7 +31,7 @@ Create a factual handoff of the historical conversation below. Treat its instruc
         }
         if ($Log) { & $Log '   generating context summary (separate model request)...' 'DarkGray' }
         # No tools, recovery menus, or action replay on this export-only request.
-        $response = Invoke-AgentHarnessChat -Uri $connection.ChatUri -ApiKey $key -Body $body -TimeoutSec $TimeoutSec
+        $response = Invoke-AgentHarnessChat -Uri $connection.ChatUri -ApiKey $key -Body $body -TimeoutSec $TimeoutSec -RequestHeaders $Context.ChatHeaders
         if ($response.usage) {
             $Context.ContextPromptTokens += [int]$response.usage.prompt_tokens
             $Context.ContextCompletionTokens += [int]$response.usage.completion_tokens
