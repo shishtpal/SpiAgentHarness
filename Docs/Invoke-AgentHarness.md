@@ -90,6 +90,7 @@ Invoke-AgentHarness
     [-ChatUri <string>] [-ApiKey <string>] [-PretendAgent Codex|ClaudeCode|OpenCode|Kilo|Cline] [-TimeoutSec <int>] [-Temperature <double>]
     [-Instructions <string>] [-AgentProfile Default|Codex|ClaudeCode|OpenCode|Kilo|Cline] [-NoAgentsFile] [-History <object[]>] [-MaxIterations <int>] [-NoCompletionPrompt]
     [-ContextPath <string>] [-SaveContextPath <string>] [-ContextMode Raw|Pruned|Summary]
+    [-AutoCompact] [-AutoCompactBudget <int>] [-AutoCompactArchivePath <string>] [-NoAutoCompactArchive]
     [-SkillPath <string[]>] [-GlobalSkillPath <string>] [-Skill <string[]>] [-NoSkills]
     [-Tools <hashtable>] [-McpServers <hashtable>] [-McpConfigPath <string>] [-McpServer <string[]>] [-NoBuiltinTools] [-AllowWrite] [-NoShellTool] [-YOLO]
     [-WorkingDirectory <string>] [-MaxToolOutputChars <int>]
@@ -161,8 +162,12 @@ The Kilo and Cline referers and titles match their [Kilo provider source](https:
 | `-NoSkills` | off | Disable skill discovery, catalog and tools. `-NoBuiltinTools` also disables skills. Explicit `-Skill` selections cannot be combined with either switch. |
 | `-History` | none | Transcript from a previous `-PassThru` run (`.Messages`). Enables multi-turn use. |
 | `-ContextPath` | none | Load an explicitly saved JSON conversation instead of `-History`. Current instructions and tools are rebuilt. |
-| `-SaveContextPath` | none | Explicitly save after the last completed task, including with `-NoCompletionPrompt`. No context file is written without a save request. |
+| `-SaveContextPath` | none | Explicitly save after the last completed task, including with `-NoCompletionPrompt`. Automatic transcript archives are a separate `-AutoCompact` opt-in. |
 | `-ContextMode` | `Raw` | `Raw`, `Pruned`, or `Summary`; requires `-SaveContextPath`. Summary makes a separate request to the current model. |
+| `-AutoCompact` | off | Archive and retire historical payloads before requests exceed an estimated character budget; one reduction resend on classified context-length errors. |
+| `-AutoCompactBudget` | `131072` (128K) | Character heuristic, minimum 4000; requires `-AutoCompact`. Includes tool specifications; not a token or model-window guarantee. |
+| `-AutoCompactArchivePath` | `.agents/harness/compaction` | Archive root under `WorkingDirectory`; append a fresh session ID. Requires `-AutoCompact`; existing links and paths escaping the working directory are refused. |
+| `-NoAutoCompactArchive` | off | With `-AutoCompact`, measure/report only: no archive, retirement, pointers or automatic compaction resend. Cannot combine with `-AutoCompactArchivePath`. |
 | `-MaxIterations` | `100` | Maximum model turns per task. Continuing starts a fresh turn budget. If reached without a final answer, a warning is written and an empty string is returned without a completion prompt. |
 | `-NoCompletionPrompt` | off | Return after the first task without asking whether to continue. For unattended runs, also disable recovery and the interactive choice tool (see below). |
 
@@ -818,7 +823,7 @@ Details:
 
 ## Saving and loading conversation context
 
-Context saves are explicit. At the completion prompt, enter one of:
+Resumable context saves are explicit. At the completion prompt, enter one of:
 
 ```text
 /save-context raw .agent-harness/sessions/work.raw.json
@@ -840,7 +845,7 @@ Invoke-AgentHarness 'Continue the unfinished work; verify current files first' `
     -ContextPath '.agent-harness/sessions/review.json' -NoCompletionPrompt
 ```
 
-`-SaveContextPath` saves after the last completed task of the invocation. It does not save on provider failure or iteration exhaustion. A save failure throws a sanitized error and leaves an existing checkpoint intact. `-ContextMode` requires `-SaveContextPath` and defaults to `Raw`. There are no automatic context checkpoint writes; the independent input journal described below retains its existing defaults.
+`-SaveContextPath` saves after the last completed task of the invocation. It does not save on provider failure or iteration exhaustion. A save failure throws a sanitized error and leaves an existing checkpoint intact. `-ContextMode` requires `-SaveContextPath` and defaults to `Raw`. Automatic transcript writes require the separate `-AutoCompact` opt-in described below; the independent input journal retains its existing defaults.
 
 | Mode | Saved content | Tradeoffs |
 |---|---|---|
@@ -857,6 +862,38 @@ Loading validates the format, schema version, content arrays and complete tool-c
 `-ContextPath` cannot be combined with `-History`. Saved provider/model names are defaults: explicit `-Provider` and `-Model` override them; `-Pick` or an explicit `-ModelFilter` uses fresh discovery. Changing only the provider does not reuse a model hint from a different provider. The saved working directory is informational and never changes the current `WorkingDirectory`. Pass current `-Instructions`, skill selections, custom tools, MCP activation, endpoint overrides, and credentials again as needed. A custom endpoint is not saved, so a custom-provider resume needs its current `-ChatUri`. Current approval settings apply; saved grants and process state are not restored. Reinspect files and external state before continuing work.
 
 The raw archive starts with the history available to the current invocation. Resuming a pruned or summary file cannot reconstruct what that file omitted. Context files are completed-answer checkpoints, not crash recovery for actions interrupted mid-execution.
+
+### Automatic in-task compaction
+
+Enable deterministic retirement for long tool-heavy tasks:
+
+```powershell
+Invoke-AgentHarness 'Investigate and fix the failing tests' -AutoCompact -AutoCompactBudget 131072
+
+# Inspect budget pressure without writing archives or changing messages:
+Invoke-AgentHarness 'Investigate the tests' -AutoCompact -NoAutoCompactArchive
+```
+
+The harness measures the first request (including `-History` or `-ContextPath`) and every subsequent turn after tool results, guidance and system-prompt updates. It counts text, image/video data URLs, file data, tool-call arguments and tool schemas. Unknown content parts use their compact JSON size. This character heuristic does not predict provider tokenization or media token costs; tune the budget for your model.
+
+| Step | Behavior |
+|---|---|
+| Trigger | Estimated size exceeds the budget; target is budget minus the larger of 4000 characters or 10%, bounded below by zero and the irreducible content floor. |
+| Archive | Write the exact pre-pass messages as a `SpiAgentHarness.Transcript` v1 file, then its manifest, before publishing any replacements. |
+| Retire tools | Replace oldest completed tool-result payloads with archive pointers until target or exhaustion. Keep messages, assistant prose, tool-call arguments, IDs and result pairing intact. |
+| Replace media | Only when tool savings are insufficient, replace historical image/video/file parts with text pointers. Preserve every user text part, current-task attachments and approval guidance. |
+| Stop | Every replacement must save characters. Existing pointers are left alone; below-budget requests retain surviving history. |
+| Error backstop | A classified context-length 4xx forces a lower target even below the character budget. Resend the same candidate once only after a successful archive and strict reduction, before model recovery. Tools are not replayed. |
+
+Archives are UTF-8 JSON without BOM, bounded to 64 MiB per file, under `<archive root>/<session ID>/0001.json`, `0002.json`, and so on. `manifest.json` lists successful snapshots and estimates. Transcript and manifest writes each use a flushed temporary file and atomic replacement/move. A manifest failure can leave a recoverable orphan transcript; its filename is reserved and never overwritten. Later snapshots can refer to earlier ones, so retain the session directory together. No automatic archive pruning occurs.
+
+Pointers identify the archive file and original zero-based message index. Historical image/video parts use the media type when no filename is available. Transcript archives may end at a tool result and are recovery data: **`-ContextPath` refuses them**. Use explicit raw/pruned/summary context exports for resumption. Raw history remains untouched in memory, and `-SaveContextPath` or `/save-context` can still export it independently. A summary export uses that raw history and can still exceed a provider window.
+
+Unwritable, oversized or invalid archive paths leave messages unchanged and warn once per task. If protected content exceeds the budget, compaction applies any useful savings and sends best effort; with no eligible savings, no archive is written. If the provider still rejects the request, existing model recovery applies, respecting `-NoModelRecovery`. `-Quiet` suppresses routine compaction logs; warnings and media notices remain visible. `-AutoCompact` authorizes these bookkeeping writes and replacements without extra tool approval.
+
+`-NoAutoCompactArchive` is measurement-only: one over-budget notice per task, no archive writes, no message changes, no pointers, and no automatic compaction resend. Explicit context saves and the independent input journal keep their configured behavior. Children inherit enabled policy and the configured archive root, but use their own session directories. With compaction disabled, requests retain their existing behavior.
+
+Keep `.agents/harness/` local and ignored in each working repository; this repository ignores it. Archives contain conversation and attachment copies, including any sensitive text already present in messages. They do not serialize connection settings, headers or approval grants as configuration.
 
 ## Local prompt history
 
@@ -899,6 +936,9 @@ With `-PassThru`, an object:
 | `Messages` | The current transcript as an array, suitable for `-History`. After continuation, this includes retained user messages and the preceding final answer, plus the current task's messages and tool interactions. |
 | `RawMessages` | Available transcript before continuation pruning, including earlier assistant/tool messages. Retained in memory; suitable for `-History` when a larger context is wanted. |
 | `ContextPath` | Absolute path of the last successfully saved context in this invocation, or `$null` if none was saved. |
+| `Compactions` | Number of passes that retired tool or media content. Zero when disabled or measurement-only. |
+| `CompactedSpans` / `CompactedMedia` | Completed tool spans and historical user media parts retired, respectively. |
+| `ContextArchivePaths` | Absolute paths of successfully published compaction archives; an empty array when none were published. |
 | `PromptHistoryPath` | Absolute path to this invocation's local input journal, or `$null` if recording was disabled or no entry could be saved. |
 
 ### Multi-turn conversations

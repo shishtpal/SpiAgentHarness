@@ -269,6 +269,9 @@ function Invoke-AgentHarnessChat {
     $parentOptions.NoSkills = $false; $parentOptions.GlobalSkillPath = ''
     $parentOptions.Skill = @('child-guidance'); $parentOptions.SkillPath = @('./extra-skills')
     $parentCall = New-HarnessCall spawn_agent '{"task":"wired-child"}' 'parent_spawn'
+    $parentOptions.AutoCompact = $true
+    $parentOptions.AutoCompactBudget = 100000
+    $parentOptions.AutoCompactArchivePath = 'synthetic-child-archives'
     Set-HarnessResponses @((New-HarnessResponse '' @($parentCall)), (New-HarnessResponse 'parent continued'))
     $parent = Invoke-AgentHarness 'delegate a synthetic task' @parentOptions -Model 'synthetic-child-model' -ChatUri 'https://provider.invalid/child' -ApiKey $agentContext.SubAgentApiKey -YOLO -PassThru
     $parentTool = @($parent.Messages | Where-Object role -eq tool)[0]
@@ -277,9 +280,19 @@ function Invoke-AgentHarnessChat {
     Assert-Harness ($parent.Answer -eq 'parent continued' -and $wiredTask.Options.YOLO -and $wiredTask.Options.Model -eq 'synthetic-child-model') 'Public YOLO/model/context are forwarded through the parent tool loop'
     Assert-Harness ($wiredTask.Options.PretendAgent -ceq 'OpenCode') 'Public identity override is forwarded into the child task file'
     Assert-Harness ($wiredTask.Options.AgentProfile -ceq 'Cline') 'Public behavior profile is forwarded into the child task file'
+    Assert-Harness ($wiredTask.Options.AutoCompact -and $wiredTask.Options.AutoCompactBudget -eq 100000 -and $wiredTask.Options.AutoCompactArchivePath -ceq 'synthetic-child-archives') 'Child task inherits compaction policy and configured root without a parent session directory'
     Assert-Harness (-not $wiredTask.Options.NoSkills -and $wiredTask.Options.Skill -contains 'child-guidance' -and [IO.Path]::IsPathRooted($wiredTask.Options.SkillPath[0]) -and $wiredTask.Options.GlobalSkillPath -eq '') 'Child inherits explicit selections, normalized skill roots and disabled global root'
     $wiredCompletion = Invoke-SubAgentFixtureTool wait_agent @{ agent_id = $wiredChild.Id; timeout_seconds = 30 } -Context $agentContext
     Assert-Harness ((ConvertFrom-Json -InputObject $wiredCompletion.content).State -eq 'completed') 'Child launched through public entry point completes using inherited provider settings'
+    $parentOptions.Remove('AutoCompactArchivePath')
+    $parentOptions.NoAutoCompactArchive = $true
+    Set-HarnessResponses @((New-HarnessResponse '' @($parentCall)), (New-HarnessResponse 'measurement parent continued'))
+    $measurementParent = Invoke-AgentHarness 'delegate in measurement mode' @parentOptions -Model 'synthetic-child-model' -ChatUri 'https://provider.invalid/child' -ApiKey $agentContext.SubAgentApiKey -YOLO -PassThru
+    $measurementChild = ConvertFrom-Json -InputObject (@($measurementParent.Messages | Where-Object role -eq tool)[0].content) -AsHashtable
+    $measurementTask = ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($measurementChild.TaskFile)) -AsHashtable
+    Assert-Harness ($measurementTask.Options.AutoCompact -and $measurementTask.Options.NoAutoCompactArchive -and -not $measurementTask.Options.ContainsKey('AutoCompactArchivePath')) 'Measurement-only child options omit the mutually exclusive archive parameter'
+    $measurementCompletion = Invoke-SubAgentFixtureTool wait_agent @{ agent_id = $measurementChild.Id; timeout_seconds = 30 } -Context $agentContext
+    Assert-Harness ((ConvertFrom-Json -InputObject $measurementCompletion.content).State -eq 'completed') 'Measurement-only child runs through the real isolated worker'
     Set-HarnessResponses @((New-HarnessResponse 'no delegation'))
     $null = Invoke-AgentHarness 'do not delegate' @parentOptions -NoSubAgents
     Assert-Harness (@((Get-HarnessRequests)[0].Body.tools.function.name | Where-Object { $_ -in 'spawn_agent', 'agent_status', 'wait_agent', 'stop_agent' }).Count -eq 0) 'Public NoSubAgents removes tools from provider requests'

@@ -11,9 +11,12 @@ function Invoke-AgentHarnessTurn {
         [int]$Iteration,
         [scriptblock]$Log,
         [switch]$NoModelRecovery,
-        [hashtable]$RequestHeaders
+        [hashtable]$RequestHeaders,
+        [hashtable]$CompactionContext
     )
 
+    $compactionRetryUsed = $false
+    $preparedResend = $false
     while ($State.Candidates.Count) {
         $candidate = $State.Candidates[0]
         $timer = [Diagnostics.Stopwatch]::StartNew()
@@ -30,6 +33,11 @@ function Invoke-AgentHarnessTurn {
                 if (-not $connection.OmitToolChoice) { $body['tool_choice'] = 'auto' }
             }
             if ($null -ne $Temperature) { $body['temperature'] = [double]$Temperature }
+            if (-not $preparedResend -and $CompactionContext.AutoCompact.Enabled) {
+                $null = Invoke-AgentHarnessCompaction -Messages $Messages -Context $CompactionContext `
+                    -Provider $candidate.Provider -Model $candidate.Id -Log $Log
+            }
+            $preparedResend = $false
             & $Log "[turn $Iteration] -> [$($candidate.Provider)] $($candidate.Id)" 'Cyan'
             $response = Invoke-AgentHarnessChat -Uri $connection.ChatUri -ApiKey $key -Body $body -TimeoutSec $TimeoutSec -Log $Log -RequestHeaders $RequestHeaders
             $State.Locked = $true
@@ -39,6 +47,17 @@ function Invoke-AgentHarnessTurn {
         }
         catch {
             $failure = $_
+            if (-not $compactionRetryUsed -and $CompactionContext.AutoCompact.Enabled -and
+                -not $CompactionContext.AutoCompact.MeasureOnly -and
+                (Invoke-AgentHarnessCompaction -Classify -Failure $failure)) {
+                $compactionRetryUsed = $true
+                $compaction = Invoke-AgentHarnessCompaction -Messages $Messages -Context $CompactionContext `
+                    -Provider $candidate.Provider -Model $candidate.Id -Reason too_long -Log $Log
+                if ($compaction.Changed -and $compaction.EstimatedAfter -lt $compaction.EstimatedBefore) {
+                    $preparedResend = $true
+                    continue
+                }
+            }
             $State.Attempts++
             & $Log "   failed: $($failure.Exception.Message)" 'Yellow'
             if (-not $State.Locked) {

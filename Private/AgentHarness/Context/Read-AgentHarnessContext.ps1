@@ -18,6 +18,9 @@ function Read-AgentHarnessContext {
         $snapshot = ConvertFrom-AgentHarnessContextJson -Json $json
     }
     catch { throw 'Context file must contain valid UTF-8 JSON.' }
+    if ($snapshot -is [Collections.IDictionary] -and $snapshot.format -ceq 'SpiAgentHarness.Transcript') {
+        throw 'Transcript archives cannot be loaded with -ContextPath; they are pre-compaction recovery data.'
+    }
     if ($snapshot -isnot [Collections.IDictionary] -or $snapshot.format -cne 'SpiAgentHarness.Context' -or ($snapshot.version -isnot [long] -and $snapshot.version -isnot [int]) -or $snapshot.version -ne 1) {
         throw 'Unsupported context format or version.'
     }

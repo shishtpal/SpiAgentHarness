@@ -51,7 +51,9 @@
       Use -NoCompletionPrompt to return immediately after the answer.
     * Save explicitly with /save-context raw|pruned|summary <path> at that prompt,
       or -SaveContextPath with -ContextMode. Resume with -ContextPath and a new prompt.
-      Raw history is retained in memory across continuations; no automatic context saves.
+      Raw history is retained in memory across continuations. Automatic archives require -AutoCompact.
+    * Opt into deterministic in-task retirement with -AutoCompact, archiving before changes.
+      -NoAutoCompactArchive measures only and leaves messages unchanged.
 
     Get-AgentHarnessProviderConfig reads the existing provider registry
     ($script:FreeModelProviders). Model selection, menus and logging reuse module commands.
@@ -114,6 +116,21 @@
     Export Raw (default), Pruned (all user messages and latest final answer), or
     Summary (generated handoff plus latest user message and answer). Summary makes
     a separate tool-free request to the current model. Requires SaveContextPath.
+
+.PARAMETER AutoCompact
+    Opt into pre-request character budgeting and one context-length recovery resend after reduction.
+    Archive before retiring old tool results or historical media; preserve user text and raw history.
+
+.PARAMETER AutoCompactBudget
+    Estimated character budget, default 131072 (128K). Requires AutoCompact; not a token/window limit.
+
+.PARAMETER AutoCompactArchivePath
+    Archive root under WorkingDirectory, default .agents/harness/compaction. Each invocation appends
+    its session ID. Requires AutoCompact; links and paths outside WorkingDirectory are refused.
+
+.PARAMETER NoAutoCompactArchive
+    Measurement only: no archives, message changes or compaction resend. Requires AutoCompact and
+    cannot be combined with AutoCompactArchivePath. Explicit context saves remain independent.
 
 .PARAMETER McpServers
     Hashtable mapping server names to explicit configuration hashtables. Use Command
@@ -252,6 +269,10 @@ function Invoke-AgentHarness {
         [ValidateNotNullOrEmpty()][string]$ContextPath,
         [ValidateNotNullOrEmpty()][string]$SaveContextPath,
         [ValidateSet('Raw', 'Pruned', 'Summary')][string]$ContextMode = 'Raw',
+        [switch]$AutoCompact,
+        [ValidateRange(4000, [int]::MaxValue)][int]$AutoCompactBudget = 131072,
+        [ValidateNotNullOrEmpty()][string]$AutoCompactArchivePath = '.agents/harness/compaction',
+        [switch]$NoAutoCompactArchive,
         [ValidateRange(1, [int]::MaxValue)][int]$MaxIterations = 100,
         [switch]$NoCompletionPrompt,       # return after one task without asking what next
         [switch]$NoPromptHistory,          # disable local prompt/reply journal
@@ -288,6 +309,12 @@ function Invoke-AgentHarness {
     }
     if ($PSBoundParameters.ContainsKey('ContextMode') -and -not $PSBoundParameters.ContainsKey('SaveContextPath')) {
         throw 'ContextMode requires SaveContextPath.'
+    }
+    foreach ($name in 'AutoCompactBudget', 'AutoCompactArchivePath', 'NoAutoCompactArchive') {
+        if ($PSBoundParameters.ContainsKey($name) -and -not $AutoCompact) { throw "$name requires AutoCompact." }
+    }
+    if ($NoAutoCompactArchive -and $PSBoundParameters.ContainsKey('AutoCompactArchivePath')) {
+        throw 'Specify either NoAutoCompactArchive or AutoCompactArchivePath, not both.'
     }
     if ($PSBoundParameters.ContainsKey('McpConfigPath') -and $PSBoundParameters.ContainsKey('McpServers')) {
         throw 'Specify either McpConfigPath or McpServers, not both.'
@@ -340,8 +367,15 @@ function Invoke-AgentHarness {
         ContextSessionId = [guid]::NewGuid().ToString('N')
         ContextPromptTokens = 0
         ContextCompletionTokens = 0
+        AutoCompact = New-AgentHarnessCompactionState -Enabled ([bool]$AutoCompact) -Budget $AutoCompactBudget -ArchiveRoot $AutoCompactArchivePath -MeasureOnly ([bool]$NoAutoCompactArchive)
     }
 
+    if ($AutoCompact) {
+        $ctx.SubAgentOptions.AutoCompact = $true
+        $ctx.SubAgentOptions.AutoCompactBudget = $AutoCompactBudget
+        if ($NoAutoCompactArchive) { $ctx.SubAgentOptions.NoAutoCompactArchive = $true }
+        else { $ctx.SubAgentOptions.AutoCompactArchivePath = $AutoCompactArchivePath }
+    }
     if ($PretendAgent) { $ctx.SubAgentOptions.PretendAgent = $PretendAgent }
 
     if ($ContextPath) {
@@ -390,6 +424,7 @@ function Invoke-AgentHarness {
         -AdditionalInstructions $Instructions -NoAgentsFile:$NoAgentsFile -SkillState $ctx.SkillState -AgentProfile $AgentProfile -PretendAgent $PretendAgent
     $messages = New-AgentHarnessMessages -SystemPrompt $systemPrompt -Prompt $promptText -History $History `
         -Attachments $Attachments -WorkingDirectory $ctx.Root
+    $ctx.AutoCompact.ProtectedMessages.Add($messages[-1])
     # Keep history before continuation pruning; only explicit saves write it to disk.
     $rawMessages = [Collections.Generic.List[object]]::new()
     $rawMessages.AddRange($messages.ToArray())
@@ -408,6 +443,9 @@ function Invoke-AgentHarness {
             Get-AgentHarnessMcpTools -Servers $McpServers -ToolTable $toolTable -Connections $mcpConnections -WorkingDirectory $ctx.Root
         }
         $toolSpecs = @(ConvertTo-AgentHarnessToolSpec -ToolTable $toolTable)
+        if ($AutoCompact -and $toolSpecs.Count) {
+            $ctx.AutoCompact.ToolSpecCharacters = (ConvertTo-Json -InputObject $toolSpecs -Depth 30 -Compress).Length
+        }
         & $log "== $personaName ==" 'Cyan'
         & $log ("   tools   : " + ($(if ($toolTable.Count) { $toolTable.Keys -join ', ' } else { '(none)' }))) 'DarkGray'
         & $log "   workdir : $($ctx.Root)" 'DarkGray'
@@ -424,7 +462,7 @@ function Invoke-AgentHarness {
             $taskIterations++
             $turn = Invoke-AgentHarnessTurn -State $state -Messages $messages -ToolSpecs $toolSpecs `
                 -ChatUri $ChatUri -ApiKey $ApiKey -TimeoutSec $TimeoutSec -Temperature $Temperature `
-                -RequestHeaders $ctx.ChatHeaders `
+                -RequestHeaders $ctx.ChatHeaders -CompactionContext $ctx `
                 -MaxModelAttempts $MaxModelAttempts -Iteration $iteration -Log $log -NoModelRecovery:$NoModelRecovery
             $response = $turn.Response
             $used = $turn.Candidate
@@ -439,6 +477,8 @@ function Invoke-AgentHarness {
             if ($response.PSObject.Properties['usage'] -and $response.usage) {
                 $tokIn += [int]$response.usage.prompt_tokens
                 $tokOut += [int]$response.usage.completion_tokens
+                $ctx.AutoCompact.PromptTokens = $tokIn
+                $ctx.AutoCompact.CompletionTokens = $tokOut
                 $usage = " tokens in/out=$([int]$response.usage.prompt_tokens)/$([int]$response.usage.completion_tokens)"
             }
             & $log ("   {0} ms,{1}{2} finish={3}" -f [int]$turn.ElapsedMilliseconds, $usage, $served, $response.choices[0].finish_reason) 'DarkGray'
@@ -500,6 +540,10 @@ function Invoke-AgentHarness {
                 if ([string]::IsNullOrWhiteSpace($nextPrompt)) { break }
 
                 $messages = $nextMessages
+                $ctx.AutoCompact.ProtectedMessages.Clear()
+                $ctx.AutoCompact.ProtectedMessages.Add($messages[-1])
+                $ctx.AutoCompact.RetiredMessages.Clear()
+                $ctx.AutoCompact.Notices.Clear()
                 $rawMessages[0] = $messages[0]
                 $rawMessages.Add($messages[-1])
                 $state.Candidates.Clear()
@@ -536,6 +580,7 @@ function Invoke-AgentHarness {
             }
             if ($ctx.ApprovalFeedback) {
                 $messages.Add(@{ role = 'user'; content = $ctx.ApprovalFeedback })
+                $ctx.AutoCompact.ProtectedMessages.Add($messages[-1])
                 $rawMessages.Add($messages[-1])
                 $ctx.ApprovalFeedback = $null
             }
@@ -572,6 +617,10 @@ function Invoke-AgentHarness {
                 RawMessages       = $rawMessages.ToArray()
                 ContextPath       = $ctx.SavedContextPath
                 PromptHistoryPath = $(if ($ctx.PromptHistory) { $ctx.PromptHistory.Path })
+                Compactions       = $ctx.AutoCompact.Compactions
+                CompactedSpans    = $ctx.AutoCompact.CompactedSpans
+                CompactedMedia    = $ctx.AutoCompact.CompactedMedia
+                ContextArchivePaths = $ctx.AutoCompact.ArchivePaths.ToArray()
             }
         }
         else { $final }
