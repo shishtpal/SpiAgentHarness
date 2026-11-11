@@ -22,6 +22,8 @@ Public commands:
 
 Menus, logging, sound, and all runtime helpers are private. Provider registration belongs to this module's own registry.
 
+The built-in [Respan gateway provider](Docs/Invoke-AgentHarness.md#respan) uses `RESPAN_API_KEY` for chat. Discover models with `Get-FreeModels -Provider Respan -All`, then choose one with `Invoke-AgentHarness 'Say hi' -Provider Respan -Pick -All`.
+
 Global skills default to `.agents/skills` beneath the installed module. MCP configuration defaults to `mcp.json` beside the manifest and is local configuration excluded from Git. Use `Config/AgentHarness.mcp.example.json` as an example. Servers require explicit `-McpServer` activation. Decision tools are configured with JSON packages; see [Decision tools](Docs/DecisionTools.md).
 
 User prompts and interactive replies are saved automatically to one JSONL file per invocation under the working directory's `.agents/prompts/`. Use `-NoPromptHistory` to disable recording, or `-PassThru` to obtain `PromptHistoryPath`. Attachment contents are excluded. See [local prompt history](Docs/Invoke-AgentHarness.md#local-prompt-history).

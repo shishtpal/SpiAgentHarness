@@ -115,7 +115,7 @@ Invoke-AgentHarness
 
 | Parameter | Default | Description |
 |---|---|---|
-| `-Provider` | none | Registry name (for example `OpenRouter`, `Kilo`, `Nous`, `OpenCode`, `ExperientialLabs`, `Cohere`, `Inception`). Limits auto-selection to that provider. With `-Model`, says which endpoint to use. Tab-completes from the registry. |
+| `-Provider` | none | Registry name (for example `OpenRouter`, `Kilo`, `Nous`, `OpenCode`, `ExperientialLabs`, `Cohere`, `Inception`, `Respan`). Limits auto-selection to that provider. With `-Model`, says which endpoint to use. Tab-completes from the registry. |
 | `-Model` | none | Custom model id. Skips auto-selection and uses exactly this id. |
 | `-ModelFilter` | `*` | Wildcard matched against model id or name when auto-selecting (passed to `Get-FreeModels -Name`). |
 | `-Pick` | off | Choose a model using `Show-InteractiveMenu` (arrow keys and Enter; Escape cancels). The chosen model is tried first; the rest remain as fallbacks. |
@@ -413,6 +413,24 @@ Discovery uses Cohere's [List Models API](https://docs.cohere.com/reference/list
 Chat uses Cohere's documented [OpenAI compatibility API](https://docs.cohere.com/docs/compatibility-api) at `https://api.cohere.ai/compatibility/v1/chat/completions`. This supports the harness's message history, tool definitions, tool results, and token accounting. The native [Chat API](https://docs.cohere.com/reference/chat) at `/v2/chat` uses a different response format and is not the endpoint used by this integration. `-ChatUri` overrides for Cohere must accept the OpenAI-compatible format.
 
 The same Bearer key is used for catalogue and chat requests. `-ApiKey` overrides chat authentication; catalogue discovery still uses `COHERE_API_KEY`. Pass an explicit `-Model` to skip discovery when using a chat key override. Existing retries and model recovery also apply to Cohere.
+
+### Respan
+
+`Respan` is registered automatically and uses the existing OpenAI-compatible chat runtime. Set `RESPAN_API_KEY` in your PowerShell session using a gateway-enabled key from [Respan API keys](https://platform.respan.ai/platform/gateway/api-keys), then run:
+
+```powershell
+Get-FreeModels -Provider Respan -All
+Invoke-AgentHarness 'Say hi' -Provider Respan -Pick -All
+
+# Use an exact chat model id, skipping discovery
+Invoke-AgentHarness 'Say hi' -Provider Respan -Model 'gpt-4o-mini'
+```
+
+Discovery uses `https://api.respan.ai/api/v1/models`: without a key it returns public models, and with `RESPAN_API_KEY` it returns your project's available models. Use `-All` for paid or unknown-price entries, and select a model supporting chat and tool calls. Model ids are sent unchanged. Free-only discovery requires explicit zero input and output costs; it does not grant free usage or account access.
+
+Chat requests use `https://gateway.respan.ai/chat/completions` with Bearer authentication, following Respan's [gateway guide](https://www.respan.ai/docs/ai-gateway/quickstart.md) and [OpenAI SDK integration](https://www.respan.ai/docs/integrations/gateway/open-ai-sdk). The harness reuses its streaming, message history, tool calls, retries and model recovery. `-ApiKey` and `-ChatUri` override chat authentication and routing; discovery still uses `RESPAN_API_KEY`, so pass an explicit `-Model` when using only a chat key override. A custom chat endpoint must accept the OpenAI Chat Completions format.
+
+This integrates gateway routing. No tracing SDK, CLI installation or import-time connection is needed. Requests appear in Respan's gateway logs; account credits, BYOK configuration and model access are managed in Respan. Live requests and log verification require a configured key and are separate from the mocked repository tests.
 
 ### Recovering from a failed request
 

@@ -125,7 +125,13 @@ try {
     $inceptionProvider = & $module { $script:FreeModelProviders['Inception'] }
     Assert-Harness ($null -ne $inceptionProvider -and $inceptionProvider.RequireKey -and $inceptionProvider.KeyEnvVar -eq 'INCEPTION_API_KEY') 'Inception is registered and requires its configured key'
     Assert-Harness ($inceptionProvider.Uri -eq 'https://api.inceptionlabs.ai/v1/chat/completions/models' -and $inceptionProvider.ChatUri -eq 'https://api.inceptionlabs.ai/v1/chat/completions' -and -not $inceptionProvider.OmitToolChoice) 'Inception uses chat-only discovery, an explicit chat endpoint and standard tool choice'
+    $respanProvider = & $module { $script:FreeModelProviders['Respan'] }
+    Assert-Harness ($null -ne $respanProvider -and -not $respanProvider.RequireKey -and $respanProvider.KeyEnvVar -eq 'RESPAN_API_KEY') 'Respan is registered with optional catalogue authentication'
+    Assert-Harness ($respanProvider.Uri -eq 'https://api.respan.ai/api/v1/models' -and $respanProvider.ChatUri -eq 'https://gateway.respan.ai/chat/completions' -and -not $respanProvider.OmitToolChoice) 'Respan uses its documented catalogue, gateway and standard tool choice'
     foreach ($command in 'Get-FreeModels', 'Invoke-AgentHarness') {
+        $providerCompletion = "$command -Provider Resp"
+        $matches = TabExpansion2 $providerCompletion $providerCompletion.Length
+        Assert-Harness ($matches.CompletionMatches.CompletionText -contains 'Respan') "$command completes Respan"
         $providerCompletion = "$command -Provider Exper"
         $matches = TabExpansion2 $providerCompletion $providerCompletion.Length
         Assert-Harness ($matches.CompletionMatches.CompletionText -contains 'ExperientialLabs') "$command completes ExperientialLabs"
@@ -701,6 +707,7 @@ Compare @attach("media/image [1].PNG") @attach('report.pdf') @attach(media/clip.
         }
     }
     . (Join-Path $PSScriptRoot 'AgentHarness.Inception.Tests.ps1')
+    . (Join-Path $PSScriptRoot 'AgentHarness.Respan.Tests.ps1')
 
     # Cohere discovery uses the native paginated catalogue; chat uses compatibility v1.
     & $module {

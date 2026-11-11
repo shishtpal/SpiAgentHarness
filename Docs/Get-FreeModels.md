@@ -42,6 +42,15 @@ Invoke-AgentHarness 'Say hi' -Provider Cohere -Pick -All
 
 Cohere's [List Models API](https://docs.cohere.com/reference/list-models) returns paginated model names without pricing. Discovery follows all pages of the chat catalogue, maps names to ids, and preserves context lengths. Use `-All`; these models are not assumed to be free. See [Invoke-AgentHarness](Invoke-AgentHarness.md#cohere) for chat setup.
 
+## Respan
+
+```powershell
+Get-FreeModels -Provider Respan -All
+Invoke-AgentHarness 'Say hi' -Provider Respan -Pick -All
+```
+
+Respan's [List models API](https://www.respan.ai/docs/apis/models/list-models) at `https://api.respan.ai/api/v1/models` supports public discovery without a key. Set `RESPAN_API_KEY` to list models available to your project; chat requests require that key. Model ids and context lengths are preserved. Free-only discovery requires both `pricing.input_cost` and `pricing.output_cost` to be explicitly zero; missing, null, invalid or nonzero prices are excluded, including ids ending in `:free`. Use `-All` to include paid and unknown-price models. Choose a chat-capable model from the catalogue. See [Respan gateway setup](Invoke-AgentHarness.md#respan).
+
 ## Custom catalogue mapping
 
 `Register-FreeModelProvider -GetModels` accepts a scriptblock whose first argument is the raw API response. An optional second argument is a hashtable containing the catalogue `Uri` and request `Headers`, allowing a mapper to fetch subsequent pages using the same authentication. Existing single-argument mappers continue to work. Return model objects with an `id` and optional `name`, `context_length`, and `pricing` fields.

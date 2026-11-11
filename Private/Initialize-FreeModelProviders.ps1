@@ -82,6 +82,26 @@ Register-FreeModelProvider -Name Inception `
     -ChatUri 'https://api.inceptionlabs.ai/v1/chat/completions' `
     -KeyEnvVar 'INCEPTION_API_KEY' -RequireKey
 
+# Public discovery; an optional key scopes the catalogue to the project.
+# Respan prices use input_cost/output_cost rather than prompt/completion.
+Register-FreeModelProvider -Name Respan `
+    -Uri 'https://api.respan.ai/api/v1/models' `
+    -ChatUri 'https://gateway.respan.ai/chat/completions' `
+    -KeyEnvVar 'RESPAN_API_KEY' `
+    -IsFree {
+    param($m)
+    $pricing = $m.PSObject.Properties['pricing']
+    if (-not $pricing -or -not $pricing.Value) { return $false }
+    foreach ($field in 'input_cost', 'output_cost') {
+        $cost = $pricing.Value.PSObject.Properties[$field]
+        if (-not $cost -or [string]::IsNullOrWhiteSpace([string]$cost.Value)) { return $false }
+        $value = 0.0
+        if (-not [double]::TryParse([string]$cost.Value, [Globalization.NumberStyles]::Float,
+                [Globalization.CultureInfo]::InvariantCulture, [ref]$value) -or $value -ne 0) { return $false }
+    }
+    return $true
+}
+
 # Register in module scope so completion can access the provider registry.
 Register-ArgumentCompleter -CommandName Get-FreeModels, Invoke-AgentHarness -ParameterName Provider -ScriptBlock {
     param($commandName, $parameterName, $wordToComplete)
