@@ -105,7 +105,7 @@ try {
     # Worker runtime reads this synthetic transport from disk; it never calls a live API.
     $syntheticChat = @'
 function Invoke-AgentHarnessChat {
-    param($Uri, $ApiKey, $Body, $TimeoutSec, $Log, $RequestHeaders)
+    param($Uri, $ApiKey, $Body, $TimeoutSec, $Log, $RequestHeaders, $Stream, $OnText)
     if ($Uri -ne 'https://provider.invalid/child') { throw 'Unmocked child endpoint.' }
     if ($Body.tools.function.name -contains 'spawn_agent') { throw 'Recursive child spawning was exposed.' }
     if ($ApiKey -ne 'synthetic-child-key-for-environment-only') { throw 'Child key was not inherited.' }

@@ -4,6 +4,8 @@ Decision-dependent tools can be enabled with `-DecisionConfigPath` (one or more 
 
 A minimal tool-calling agent harness for OpenAI-compatible chat endpoints, written for PowerShell 7+.
 
+Assistant responses stream by default. Use `-NoStream` for buffered requests, or `-Quiet` to suppress live text while still receiving the completed answer in the pipeline.
+
 It selects a model through the existing `Get-FreeModels` / `Register-FreeModelProvider` commands (or uses a model id you supply), then runs an agent loop: send the conversation, execute any tools the model requests, feed the results back, and repeat until the model answers without requesting a tool. After the final answer, it asks whether to continue with another task or stop.
 
 - **Source:** `Public/Invoke-AgentHarness.ps1`, with all harness-specific helpers in `Private/AgentHarness/`
@@ -87,7 +89,7 @@ Invoke-AgentHarness
     [-Prompt] <string[]>
     [-Attachments <string[]>]
     [-Provider <string>] [-Model <string>] [-ModelFilter <string>] [-Pick] [-All] [-MaxModelAttempts <int>] [-NoModelRecovery]
-    [-ChatUri <string>] [-ApiKey <string>] [-PretendAgent Codex|ClaudeCode|OpenCode|Kilo|Cline] [-TimeoutSec <int>] [-Temperature <double>]
+    [-ChatUri <string>] [-ApiKey <string>] [-PretendAgent Codex|ClaudeCode|OpenCode|Kilo|Cline] [-TimeoutSec <int>] [-NoStream] [-Temperature <double>]
     [-Instructions <string>] [-AgentProfile Default|Codex|ClaudeCode|OpenCode|Kilo|Cline] [-NoAgentsFile] [-History <object[]>] [-MaxIterations <int>] [-NoCompletionPrompt]
     [-ContextPath <string>] [-SaveContextPath <string>] [-ContextMode Raw|Pruned|Summary]
     [-SaveContextOnFailure]
@@ -413,6 +415,8 @@ Chat uses Cohere's documented [OpenAI compatibility API](https://docs.cohere.com
 The same Bearer key is used for catalogue and chat requests. `-ApiKey` overrides chat authentication; catalogue discovery still uses `COHERE_API_KEY`. Pass an explicit `-Model` to skip discovery when using a chat key override. Existing retries and model recovery also apply to Cohere.
 
 ### Recovering from a failed request
+
+If a streaming response has already delivered text, reasoning or tool-call fragments, interruption ends the invocation without automatic retries, model fallback, compaction resend or a recovery menu. Displayed text is provisional; incomplete messages do not enter history and their tool calls never execute. Start a new invocation to retry, optionally using the context from `-SaveContextOnFailure`. Previously completed tool effects remain in place and should be checked before retrying.
 
 After request retries are exhausted during an established conversation, or initial automatic model attempts are exhausted, a menu offers:
 
@@ -811,7 +815,27 @@ The trace is **on by default**. It shows:
 - fallback attempts and retry notices
 - a final summary line with turns, duration, tokens and model
 
-Use `-Quiet` to switch the trace off. The final answer is still returned.
+Use `-Quiet` to switch the trace and live assistant text off. The final answer is still returned.
+
+### Streaming responses
+
+Normal chat turns send `stream: true` and request usage reporting with `stream_options.include_usage`. Assistant content appears incrementally on the host/information stream. Reasoning remains part of the existing completed-response trace; tool-call fragments are assembled and validated before execution. The continuation checkpoint acknowledges completion without repeating text already streamed.
+
+The success pipeline still receives exactly one completed answer string, or one result object with `-PassThru`; streamed fragments never enter it. Capture the result to avoid PowerShell displaying the pipeline copy after the live text:
+
+```powershell
+$answer = Invoke-AgentHarness 'Explain this folder' -NoCompletionPrompt
+$result = Invoke-AgentHarness 'Inspect this folder' -PassThru -NoCompletionPrompt
+
+# Buffer the response for endpoints without compatible streaming support.
+Invoke-AgentHarness 'Explain this folder' -NoStream
+```
+
+`-Quiet` suppresses live display while retaining streamed transport. `6>$null` redirects host/information output as usual. Internal structured context-summary requests always remain buffered. Child agents inherit `-NoStream`.
+
+Streaming accepts OpenAI-compatible SSE chat-completion deltas ending with a finish reason and a `[DONE]` event; JSON responses from endpoints that ignore streaming are also accepted. Unsupported streaming options or event formats require `-NoStream`; the harness does not silently resend a rejected request in buffered mode. Usage totals include usage chunks when supplied by the provider; absent usage is not estimated.
+
+`-TimeoutSec` (default 120) remains the overall deadline for each attempt, including headers and body reads. Before any message fragments arrive, HTTP 429/500/502/503/504 retain up to four attempts with 2/4/8-second delays; model recovery and context-length compaction remain available. After fragments arrive, a failed stream is reported as interrupted and is not automatically replayed. Streaming responses are bounded to 16 Mi characters, including framing; malformed events, invalid tool arguments, truncated streams and exceeded limits fail without executing partial tools.
 
 Details:
 

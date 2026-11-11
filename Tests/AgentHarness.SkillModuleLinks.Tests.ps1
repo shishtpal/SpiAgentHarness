@@ -25,7 +25,7 @@ try {
         param($root)
         $state = New-AgentHarnessSkillState -WorkingDirectory $root
         function script:Invoke-AgentHarnessChat {
-            param($Uri, $ApiKey, $Body, $TimeoutSec, $Log)
+            param($Uri, $ApiKey, $Body, $TimeoutSec, $Log, $RequestHeaders, $Stream, $OnText)
             if ($Uri -ne 'https://provider.invalid/module-link') { throw "Unmocked linked-module endpoint: $Uri" }
             $calls = @()
             if (-not @($Body.messages | Where-Object role -eq tool).Count) {

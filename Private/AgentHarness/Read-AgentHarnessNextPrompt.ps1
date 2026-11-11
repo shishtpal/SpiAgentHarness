@@ -3,12 +3,14 @@ function Read-AgentHarnessNextPrompt {
         [string]$Answer,
         [switch]$NoPromptSound,
         [switch]$SkipAnswer,
+        [switch]$AnswerAlreadyDisplayed,
         [hashtable]$Context
     )
 
     # The answer and checkpoint remain visible in Quiet mode.
     if (-not $SkipAnswer) {
-        Write-AgentHarnessBlock -Title 'Task complete' -Text $Answer
+        if ($AnswerAlreadyDisplayed) { Write-Host 'Task complete' -ForegroundColor Cyan }
+        else { Write-AgentHarnessBlock -Title 'Task complete' -Text $Answer }
     }
 
     if (-not $NoPromptSound) {

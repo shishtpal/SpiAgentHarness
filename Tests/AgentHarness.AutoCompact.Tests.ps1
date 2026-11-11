@@ -266,7 +266,7 @@ try {
         & $module {
             $script:CompactStateSnapshots = [Collections.Generic.List[object]]::new()
             function script:Invoke-AgentHarnessChat {
-                param($Uri, $ApiKey, $Body, $TimeoutSec, $Log, $RequestHeaders)
+                param($Uri, $ApiKey, $Body, $TimeoutSec, $Log, $RequestHeaders, $Stream, $OnText)
                 $state = $script:CompactObservedState
                 $script:CompactStateSnapshots.Add(@{ Model = $Body.model; Attempts = $state.Attempts; Locked = $state.Locked; Candidates = $state.Candidates.Count })
                 if ($script:CompactStateSnapshots.Count -le 2) {

@@ -1,7 +1,15 @@
 #requires -Version 7.0
 # Run with: pwsh -NoProfile -File ./Tests/Invoke-AgentHarness.Tests.ps1
 # Import the real standalone manifest and loader from a fixture without user configuration or skills.
-param([switch]$DecisionToolsOnly, [switch]$SearchFilesOnly, [switch]$PromptHistoryOnly, [switch]$ContextOnly, [switch]$ProfilesOnly, [switch]$AutoCompactOnly)
+param(
+    [switch]$DecisionToolsOnly,
+    [switch]$SearchFilesOnly,
+    [switch]$PromptHistoryOnly,
+    [switch]$ContextOnly,
+    [switch]$ProfilesOnly,
+    [switch]$AutoCompactOnly,
+    [switch]$StreamingOnly
+)
 
 $ErrorActionPreference = 'Stop'
 # Test dependencies must never auto-load a user-installed legacy module.
@@ -168,6 +176,19 @@ try {
             $next
         }
         function script:Start-Sleep { param([int]$Seconds) $script:Delays.Add($Seconds) }
+        function script:New-AgentHarnessChatClient { throw 'Unexpected live streaming request.' }
+        function script:Invoke-AgentHarnessChatRequest {
+            param($Uri, $Headers, $Json, $TimeoutSec, [switch]$Stream, $OnText)
+            # Behavioral suites use completed provider responses; streaming has its own transport suite.
+            Invoke-RestMethod -Method Post -Uri $Uri -Headers $Headers -ContentType 'application/json' -Body $Json -TimeoutSec $TimeoutSec
+        }
+    }
+    if ($StreamingOnly -or -not ($DecisionToolsOnly -or $SearchFilesOnly -or $PromptHistoryOnly -or $ContextOnly -or $ProfilesOnly -or $AutoCompactOnly)) {
+        . (Join-Path $PSScriptRoot 'AgentHarness.Streaming.Tests.ps1')
+        if ($StreamingOnly) {
+            Write-Host "Passed $checks streaming checks. Isolated fixture and synthetic HTTP handler; no live requests."
+            return
+        }
     }
     if ($DecisionToolsOnly) {
         . (Join-Path $PSScriptRoot 'AgentHarness.Decisions.Tests.ps1')

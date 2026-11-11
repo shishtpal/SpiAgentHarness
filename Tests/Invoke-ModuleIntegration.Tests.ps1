@@ -66,6 +66,11 @@ try {
 
     & $module {
         $script:StandaloneRequests = 0
+        function script:New-AgentHarnessChatClient { throw 'Unexpected live streaming request.' }
+        function script:Invoke-AgentHarnessChatRequest {
+            param($Uri, $Headers, $Json, $TimeoutSec, [switch]$Stream, $OnText)
+            Invoke-RestMethod -Method Post -Uri $Uri -Headers $Headers -ContentType 'application/json' -Body $Json -TimeoutSec $TimeoutSec
+        }
         function script:Invoke-RestMethod {
             [CmdletBinding()]
             param($Method, $Uri, $Headers, $ContentType, $Body, $TimeoutSec)

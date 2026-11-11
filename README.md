@@ -9,6 +9,8 @@ Invoke-AgentHarness 'Summarise README.md' -Provider Kilo -Pick
 
 The module is self-contained. Import does not load SpiPowershell, run credential or bootstrap scripts, contact providers, or start MCP servers. Credentials come from provider-specific environment variables or explicit parameters at request time.
 
+Assistant responses stream by default. Use `-NoStream` for buffered requests or `-Quiet` to suppress live text. The pipeline still returns one completed answer or `-PassThru` result; interrupted streamed messages are not automatically replayed and their tool calls never execute. See [streaming responses](Docs/Invoke-AgentHarness.md#streaming-responses).
+
 Public commands:
 
 - [Invoke-AgentHarness](Docs/Invoke-AgentHarness.md)

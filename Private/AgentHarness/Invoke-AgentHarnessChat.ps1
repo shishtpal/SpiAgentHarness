@@ -2,7 +2,8 @@ function Invoke-AgentHarnessChat {
     # POST one chat/completions request. Retries 429/5xx; throws with .Data['Status'] set.
     param(
         [string]$Uri, [string]$ApiKey, [hashtable]$Body,
-        [int]$TimeoutSec = 120, [scriptblock]$Log, [hashtable]$RequestHeaders
+        [int]$TimeoutSec = 120, [scriptblock]$Log, [hashtable]$RequestHeaders,
+        [switch]$Stream, [scriptblock]$OnText
     )
 
     $headers = @{}
@@ -10,13 +11,17 @@ function Invoke-AgentHarnessChat {
         foreach ($name in $RequestHeaders.Keys) { $headers[$name] = $RequestHeaders[$name] }
     }
     if ($ApiKey) { $headers['Authorization'] = "Bearer $ApiKey" }
-    $json = $Body | ConvertTo-Json -Depth 30 -Compress
+    $requestBody = $Body.Clone()
+    if ($Stream) {
+        $requestBody.stream = $true
+        $requestBody.stream_options = @{ include_usage = $true }
+    }
+    $json = ConvertTo-Json -InputObject $requestBody -Depth 30 -Compress
     $delay = 2
 
     for ($try = 1; $try -le 4; $try++) {
         try {
-            $resp = Invoke-RestMethod -Method Post -Uri $Uri -Headers $headers `
-                -ContentType 'application/json' -Body $json -TimeoutSec $TimeoutSec -ErrorAction Stop
+            $resp = Invoke-AgentHarnessChatRequest -Uri $Uri -Headers $headers -Json $json -TimeoutSec $TimeoutSec -Stream:$Stream -OnText $OnText
 
             # Some gateways return HTTP 200 with an error object
             if ($resp.PSObject.Properties['error'] -and $resp.error) {
@@ -35,6 +40,8 @@ function Invoke-AgentHarnessChat {
         }
         catch {
             $err = $_
+            # Never replay an attempt whose provisional output may already be visible.
+            if ($err.Exception.Data['StreamStarted']) { throw }
             $status = $null
             if ($err.Exception.Data.Contains('Status')) { $status = $err.Exception.Data['Status'] }
             elseif ($err.Exception.PSObject.Properties['Response'] -and $err.Exception.Response) {

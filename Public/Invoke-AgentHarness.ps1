@@ -23,6 +23,8 @@
       On Windows, @clipboard attaches the current clipboard screenshot as PNG.
     * Output is verbose by default (trace goes to the host/information stream).
       Use -Quiet to turn it off. The final answer is always returned as output.
+    * Assistant text streams by default; -NoStream uses buffered requests.
+      Quiet suppresses live text. The pipeline still receives one completed answer.
     * Loads AGENTS.md from the working directory unless -NoAgentsFile is set.
       -Instructions appends user instructions to the default system prompt.
     * Discovers project skills in .agents/skills and global skills in the module's .agents/skills.
@@ -62,6 +64,12 @@
     Include paid and unknown-price models during discovery and recovery.
     Combine with -Pick to choose interactively from the full catalogue.
     By default, discovery and recovery list only free models.
+
+.PARAMETER NoStream
+    Disable default streaming and use buffered chat requests. Live text uses the
+    information stream and is suppressed by Quiet. Interrupted streamed messages
+    are not saved or automatically replayed; their tool calls never execute.
+    Structured context summaries always use buffered requests.
 
 .PARAMETER Prompt
     The user message, as a string or an array of lines (for example Get-Clipboard).
@@ -260,6 +268,7 @@ function Invoke-AgentHarness {
         [string]$ApiKey,
         [ValidateSet('Codex', 'ClaudeCode', 'OpenCode', 'Kilo', 'Cline')][string]$PretendAgent,
         [ValidateRange(1, [int]::MaxValue)][int]$TimeoutSec = 120,
+        [switch]$NoStream,
         [Nullable[double]]$Temperature,
 
         # --- conversation ---------------------------------------------------
@@ -368,6 +377,7 @@ function Invoke-AgentHarness {
             GlobalSkillPath = $GlobalSkillPath
             MaxIterations = $MaxIterations; MaxToolOutputChars = $MaxToolOutputChars
             TimeoutSec = $TimeoutSec; NoPromptSound = [bool]$NoPromptSound
+            NoStream = [bool]$NoStream
         }
         SubAgentApiKey  = $ApiKey
         ChatHeaders    = Get-AgentHarnessIdentityHeaders -PretendAgent $PretendAgent
@@ -467,9 +477,21 @@ function Invoke-AgentHarness {
         while ($taskIterations -lt $MaxIterations) {
             $iteration++
             $taskIterations++
+            $streamDisplay = @{ Started = $false }
+            $onText = {
+                param([string]$Delta)
+                if ($Quiet) { return }
+                if (-not $streamDisplay.Started) {
+                    Write-Host ''
+                    Write-Host 'Assistant' -ForegroundColor Cyan
+                    $streamDisplay.Started = $true
+                }
+                Write-Host -Object $Delta -NoNewline -ForegroundColor Gray
+            }.GetNewClosure()
             try {
                 $turn = Invoke-AgentHarnessTurn -State $state -Messages $messages -ToolSpecs $toolSpecs `
                     -ChatUri $ChatUri -ApiKey $ApiKey -TimeoutSec $TimeoutSec -Temperature $Temperature `
+                    -NoStream:$NoStream -OnText $onText `
                     -RequestHeaders $ctx.ChatHeaders -CompactionContext $ctx `
                     -MaxModelAttempts $MaxModelAttempts -Iteration $iteration -Log $log -NoModelRecovery:$NoModelRecovery
             }
@@ -481,6 +503,9 @@ function Invoke-AgentHarness {
                     if ($recoveryPath) { $failure.Exception.Data['RecoveryContextPath'] = $recoveryPath }
                 }
                 throw
+            }
+            finally {
+                if ($streamDisplay.Started) { Write-Host '' }
             }
             $response = $turn.Response
             $used = $turn.Candidate
@@ -522,7 +547,7 @@ function Invoke-AgentHarness {
                 if ($NoCompletionPrompt) { break }
                 $retryPrompt = $false
                 while ($true) {
-                    $nextPrompt = Read-AgentHarnessNextPrompt -Answer $final -NoPromptSound:$NoPromptSound -SkipAnswer:$retryPrompt -Context $ctx
+                    $nextPrompt = Read-AgentHarnessNextPrompt -Answer $final -NoPromptSound:$NoPromptSound -SkipAnswer:$retryPrompt -AnswerAlreadyDisplayed:($streamDisplay.Started) -Context $ctx
                     if ([string]::IsNullOrWhiteSpace($nextPrompt)) { break }
                     if ($nextPrompt.TrimStart() -match '^/save-context(?:\s|$)') {
                         try {
@@ -578,7 +603,7 @@ function Invoke-AgentHarness {
                 continue
             }
 
-            if ($text) { & $log "   assistant: $text" 'Gray' }
+            if ($text -and -not $streamDisplay.Started) { & $log "   assistant: $text" 'Gray' }
 
             $messages.Add(@{ role = 'assistant'; content = ($text ? $text : $null); tool_calls = $calls })
             $rawMessages.Add($messages[-1])
