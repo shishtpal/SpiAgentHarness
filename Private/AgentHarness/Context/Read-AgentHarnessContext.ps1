@@ -21,8 +21,13 @@ function Read-AgentHarnessContext {
     if ($snapshot -is [Collections.IDictionary] -and $snapshot.format -ceq 'SpiAgentHarness.Transcript') {
         throw 'Transcript archives cannot be loaded with -ContextPath; they are pre-compaction recovery data.'
     }
-    if ($snapshot -isnot [Collections.IDictionary] -or $snapshot.format -cne 'SpiAgentHarness.Context' -or ($snapshot.version -isnot [long] -and $snapshot.version -isnot [int]) -or $snapshot.version -ne 1) {
+    if ($snapshot -isnot [Collections.IDictionary] -or $snapshot.format -isnot [string] -or $snapshot.format -cnotin @('SpiAgentHarness.Context', 'SpiAgentHarness.Recovery') -or ($snapshot.version -isnot [long] -and $snapshot.version -isnot [int]) -or $snapshot.version -ne 1) {
         throw 'Unsupported context format or version.'
+    }
+    $isRecovery = $snapshot.format -ceq 'SpiAgentHarness.Recovery'
+    if ($isRecovery -and ($snapshot.mode -cne 'raw' -or $snapshot.status -isnot [string] -or $snapshot.status -cne 'interrupted' -or
+        $snapshot.stopReason -isnot [string] -or $snapshot.stopReason -cnotin @('provider_failure', 'iteration_limit'))) {
+        throw 'Recovery context metadata is invalid.'
     }
     if ($snapshot.mode -isnot [string] -or $snapshot.mode -cnotin @('raw', 'pruned', 'summary') -or $snapshot.messages -isnot [array]) { throw 'Context mode or messages are invalid.' }
     foreach ($field in 'sessionId', 'createdAt', 'workingDirectory', 'provider', 'model') {
@@ -31,6 +36,6 @@ function Read-AgentHarnessContext {
     if ($snapshot.mode -eq 'summary') {
         Assert-AgentHarnessContextSummary -Summary $snapshot.summary
     }
-    $snapshot.messages = ConvertTo-AgentHarnessContextMessages -Messages $snapshot.messages
+    $snapshot.messages = ConvertTo-AgentHarnessContextMessages -Messages $snapshot.messages -AllowInterrupted:$isRecovery
     $snapshot
 }

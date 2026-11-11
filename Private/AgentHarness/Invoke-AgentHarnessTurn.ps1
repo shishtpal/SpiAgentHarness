@@ -19,6 +19,7 @@ function Invoke-AgentHarnessTurn {
     $preparedResend = $false
     while ($State.Candidates.Count) {
         $candidate = $State.Candidates[0]
+        $State.LastCandidate = $candidate
         $timer = [Diagnostics.Stopwatch]::StartNew()
         try {
             $connection = Get-AgentHarnessProviderConfig -Provider $candidate.Provider -ChatUri $ChatUri

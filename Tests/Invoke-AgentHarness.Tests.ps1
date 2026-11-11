@@ -348,7 +348,18 @@ try {
         Set-HarnessResponses @((New-HarnessResponse 'Object history accepted'))
         $null = Invoke-AgentHarness 'Inspect new media' @basic -History $objectHistory -Attachments $imagePath
         $objectMessages = @(Get-HarnessRequests)[0].Body.messages
-        Assert-Harness ((ConvertTo-Json -InputObject @($objectMessages[1..4]) -Depth 20 -Compress) -ceq $objectHistoryBefore) 'Media injection preserves object history roles, contents and tool-call metadata under Continue and Stop'
+        $objectHistoryPreserved = $true
+        for ($historyIndex = 0; $historyIndex -lt $objectHistory.Count; $historyIndex++) {
+            $expectedMessage = $objectHistory[$historyIndex]
+            $actualMessage = $objectMessages[$historyIndex + 1]
+            $expectedProperties = @($expectedMessage.PSObject.Properties.Name | Sort-Object)
+            if (($actualMessage.PSObject.Properties.Name | Sort-Object) -join ',' -cne ($expectedProperties -join ',')) { $objectHistoryPreserved = $false }
+            foreach ($propertyName in $expectedProperties) {
+                if ((ConvertTo-Json -InputObject $actualMessage.$propertyName -Depth 20 -Compress) -cne
+                    (ConvertTo-Json -InputObject $expectedMessage.$propertyName -Depth 20 -Compress)) { $objectHistoryPreserved = $false }
+            }
+        }
+        Assert-Harness $objectHistoryPreserved 'Media injection preserves object history roles, contents and tool-call metadata under Continue and Stop'
         Assert-Harness ($objectMessages[-1].content[1].image_url.url -eq $attachmentParts[1].image_url.url) 'Object history does not prevent injecting new attachment bytes'
         Assert-Harness ((ConvertTo-Json -InputObject $objectHistory -Depth 20 -Compress) -ceq $objectHistoryBefore) 'Media injection leaves caller object history unchanged'
     }

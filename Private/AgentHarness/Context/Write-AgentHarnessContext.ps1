@@ -3,13 +3,14 @@ function Write-AgentHarnessContext {
         [string]$Path, [ValidateSet('Raw', 'Pruned', 'Summary')][string]$Mode,
         [object[]]$Messages, [hashtable]$Context,
         [string]$Provider, [string]$Model, [string]$ChatUri, [string]$ApiKey,
-        [int]$TimeoutSec = 120, [scriptblock]$Log
+        [int]$TimeoutSec = 120, [scriptblock]$Log,
+        [ValidateSet('', 'provider_failure', 'iteration_limit')][string]$StopReason = ''
     )
 
     $ErrorActionPreference = 'Stop'
     $full = Resolve-AgentHarnessContextPath -Root $Context.Root -Path $Path
     $snapshot = New-AgentHarnessContext -Mode $Mode -Messages $Messages -Context $Context `
-        -Provider $Provider -Model $Model -ChatUri $ChatUri -ApiKey $ApiKey -TimeoutSec $TimeoutSec -Log $Log
+        -Provider $Provider -Model $Model -ChatUri $ChatUri -ApiKey $ApiKey -TimeoutSec $TimeoutSec -Log $Log -StopReason $StopReason
     $json = ConvertTo-Json -InputObject $snapshot -Depth 30 -WarningAction Stop
     $bytes = [Text.UTF8Encoding]::new($false).GetBytes($json)
     if ($bytes.Length -gt 64MB) { throw 'Context files cannot exceed 64 MiB.' }
@@ -25,6 +26,7 @@ function Write-AgentHarnessContext {
         [IO.File]::Move($temporary, $full, $true)
     }
     finally { if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) } }
-    $Context.SavedContextPath = $full
+    if ($StopReason) { $Context.RecoveryContextPath = $full }
+    else { $Context.SavedContextPath = $full }
     $full
 }

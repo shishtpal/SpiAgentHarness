@@ -118,6 +118,11 @@
     Summary (generated handoff plus latest user message and answer). Summary makes
     a separate tool-free request to the current model. Requires SaveContextPath.
 
+.PARAMETER SaveContextOnFailure
+    Save raw recovery context on provider failure or iteration exhaustion, without
+    requiring SaveContextPath. Generates and reports a unique path under
+    .agents/harness/checkpoints in WorkingDirectory. Resume with ContextPath.
+
 .PARAMETER AutoCompact
     Opt into pre-request character budgeting and one context-length recovery resend after reduction.
     Archive before retiring old tool results or historical media; preserve user text and raw history.
@@ -269,6 +274,7 @@ function Invoke-AgentHarness {
         [object[]]$History,                # transcript from a previous -PassThru run
         [ValidateNotNullOrEmpty()][string]$ContextPath,
         [ValidateNotNullOrEmpty()][string]$SaveContextPath,
+        [switch]$SaveContextOnFailure,
         [ValidateSet('Raw', 'Pruned', 'Summary')][string]$ContextMode = 'Raw',
         [switch]$AutoCompact,
         [ValidateRange(4000, [int]::MaxValue)][int]$AutoCompactBudget = 131072,
@@ -461,10 +467,21 @@ function Invoke-AgentHarness {
         while ($taskIterations -lt $MaxIterations) {
             $iteration++
             $taskIterations++
-            $turn = Invoke-AgentHarnessTurn -State $state -Messages $messages -ToolSpecs $toolSpecs `
-                -ChatUri $ChatUri -ApiKey $ApiKey -TimeoutSec $TimeoutSec -Temperature $Temperature `
-                -RequestHeaders $ctx.ChatHeaders -CompactionContext $ctx `
-                -MaxModelAttempts $MaxModelAttempts -Iteration $iteration -Log $log -NoModelRecovery:$NoModelRecovery
+            try {
+                $turn = Invoke-AgentHarnessTurn -State $state -Messages $messages -ToolSpecs $toolSpecs `
+                    -ChatUri $ChatUri -ApiKey $ApiKey -TimeoutSec $TimeoutSec -Temperature $Temperature `
+                    -RequestHeaders $ctx.ChatHeaders -CompactionContext $ctx `
+                    -MaxModelAttempts $MaxModelAttempts -Iteration $iteration -Log $log -NoModelRecovery:$NoModelRecovery
+            }
+            catch {
+                $failure = $_
+                if ($SaveContextOnFailure) {
+                    $recoveryPath = Write-AgentHarnessFailureContext -Messages $rawMessages.ToArray() -Context $ctx `
+                        -Candidate $state.LastCandidate -StopReason provider_failure
+                    if ($recoveryPath) { $failure.Exception.Data['RecoveryContextPath'] = $recoveryPath }
+                }
+                throw
+            }
             $response = $turn.Response
             $used = $turn.Candidate
             $ctx.SubAgentProvider = $used.Provider
@@ -613,6 +630,10 @@ function Invoke-AgentHarness {
         $tokOut += $ctx.ContextCompletionTokens
 
         if ($null -eq $final) {
+            if ($SaveContextOnFailure) {
+                $null = Write-AgentHarnessFailureContext -Messages $rawMessages.ToArray() -Context $ctx `
+                    -Candidate $used -StopReason iteration_limit
+            }
             Write-Warning "Stopped after $MaxIterations iterations without a final answer."
             $final = ''
         }
@@ -632,6 +653,7 @@ function Invoke-AgentHarness {
                 Messages          = $messages.ToArray()
                 RawMessages       = $rawMessages.ToArray()
                 ContextPath       = $ctx.SavedContextPath
+                RecoveryContextPath = $ctx.RecoveryContextPath
                 PromptHistoryPath = $(if ($ctx.PromptHistory) { $ctx.PromptHistory.Path })
                 Compactions       = $ctx.AutoCompact.Compactions
                 CompactedSpans    = $ctx.AutoCompact.CompactedSpans

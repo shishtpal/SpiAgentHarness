@@ -90,6 +90,7 @@ Invoke-AgentHarness
     [-ChatUri <string>] [-ApiKey <string>] [-PretendAgent Codex|ClaudeCode|OpenCode|Kilo|Cline] [-TimeoutSec <int>] [-Temperature <double>]
     [-Instructions <string>] [-AgentProfile Default|Codex|ClaudeCode|OpenCode|Kilo|Cline] [-NoAgentsFile] [-History <object[]>] [-MaxIterations <int>] [-NoCompletionPrompt]
     [-ContextPath <string>] [-SaveContextPath <string>] [-ContextMode Raw|Pruned|Summary]
+    [-SaveContextOnFailure]
     [-AutoCompact] [-AutoCompactBudget <int>] [-AutoCompactArchivePath <string>] [-NoAutoCompactArchive]
     [-SkillPath <string[]>] [-GlobalSkillPath <string>] [-Skill <string[]>] [-NoSkills]
     [-Tools <hashtable>] [-McpServers <hashtable>] [-McpConfigPath <string>] [-McpServer <string[]>] [-NoBuiltinTools] [-AllowWrite] [-NoShellTool] [-YOLO]
@@ -161,9 +162,10 @@ The Kilo and Cline referers and titles match their [Kilo provider source](https:
 | `-Skill` | none | Exact skill names to preload into the system instructions on every task. |
 | `-NoSkills` | off | Disable skill discovery, catalog and tools. `-NoBuiltinTools` also disables skills. Explicit `-Skill` selections cannot be combined with either switch. |
 | `-History` | none | Transcript from a previous `-PassThru` run (`.Messages`). Enables multi-turn use. |
-| `-ContextPath` | none | Load an explicitly saved JSON conversation instead of `-History`. Current instructions and tools are rebuilt. |
+| `-ContextPath` | none | Load a saved JSON conversation or failure checkpoint instead of `-History`. Current instructions and tools are rebuilt. |
 | `-SaveContextPath` | none | Explicitly save after the last completed task, including with `-NoCompletionPrompt`. Automatic transcript archives are a separate `-AutoCompact` opt-in. |
 | `-ContextMode` | `Raw` | `Raw`, `Pruned`, or `Summary`; requires `-SaveContextPath`. Summary makes a separate request to the current model. |
+| `-SaveContextOnFailure` | off | Save raw recovery context on provider failure or iteration exhaustion. Generates and reports a unique path under `.agents/harness/checkpoints/`; no `-SaveContextPath` required. |
 | `-AutoCompact` | off | Archive and retire historical payloads before requests exceed an estimated character budget; one reduction resend on classified context-length errors. |
 | `-AutoCompactBudget` | `131072` (128K) | Character heuristic, minimum 4000; requires `-AutoCompact`. Includes tool specifications; not a token or model-window guarantee. |
 | `-AutoCompactArchivePath` | `.agents/harness/compaction` | Archive root under `WorkingDirectory`; append a fresh session ID. Requires `-AutoCompact`; existing links and paths escaping the working directory are refused. |
@@ -845,7 +847,24 @@ Invoke-AgentHarness 'Continue the unfinished work; verify current files first' `
     -ContextPath '.agent-harness/sessions/review.json' -NoCompletionPrompt
 ```
 
-`-SaveContextPath` saves after the last completed task of the invocation. It does not save on provider failure or iteration exhaustion. A save failure throws a sanitized error and leaves an existing checkpoint intact. `-ContextMode` requires `-SaveContextPath` and defaults to `Raw`. Automatic transcript writes require the separate `-AutoCompact` opt-in described below; the independent input journal retains its existing defaults.
+`-SaveContextPath` saves after the last completed task of the invocation. It does not save on provider failure or iteration exhaustion; use the independent `-SaveContextOnFailure` switch for those cases. A completed-export save failure throws a sanitized error and leaves an existing checkpoint intact. `-ContextMode` requires `-SaveContextPath` and defaults to `Raw`. Compaction transcript writes require the separate `-AutoCompact` opt-in described below; the independent input journal retains its existing defaults.
+
+For failure recovery, no destination parameter is needed:
+
+```powershell
+Invoke-AgentHarness 'Continue the investigation' -Provider Kilo -Pick `
+    -SaveContextOnFailure -NoCompletionPrompt
+
+# Use the absolute checkpoint path reported in the warning.
+Invoke-AgentHarness 'Verify current state and continue the unfinished work' `
+    -ContextPath '.agents/harness/checkpoints/<generated-name>.json' -NoCompletionPrompt
+```
+
+`-SaveContextOnFailure` writes once when a provider turn fails after available retries/model recovery, or when a task reaches `-MaxIterations` without a final answer. It generates a timestamp-and-GUID filename under `WorkingDirectory/.agents/harness/checkpoints/`, already ignored by this repository. Successful runs write no failure checkpoint. Saving is raw and local, irrespective of `-ContextMode`; it makes no summary request and does not replace an existing completed export.
+
+The warning reports the absolute saved path, including with `-Quiet`. On provider failure the original error still throws, with its exception's `Data['RecoveryContextPath']` set when saving succeeds. On iteration exhaustion, `-PassThru` returns `RecoveryContextPath`; `ContextPath` continues to identify completed exports only. A checkpoint write failure emits a sanitized warning and preserves the original provider error or iteration-exhaustion behavior.
+
+Recovery files use the separate versioned `SpiAgentHarness.Recovery` format, with `status: interrupted` and `stopReason: provider_failure|iteration_limit`. They retain available raw history across task continuations and may end at a user message or a completed tool batch. All tool calls must still have matching results. `-ContextPath` accepts these files, refreshes instructions and permissions, and adds your new prompt without executing historical tools. Recheck current files and external state before repeating actions. This opt-in saves at handled failure boundaries; it does not protect against process crashes, forced termination or interruption halfway through a tool batch.
 
 | Mode | Saved content | Tradeoffs |
 |---|---|---|
@@ -861,7 +880,7 @@ Loading validates the format, schema version, content arrays and complete tool-c
 
 `-ContextPath` cannot be combined with `-History`. Saved provider/model names are defaults: explicit `-Provider` and `-Model` override them; `-Pick` or an explicit `-ModelFilter` uses fresh discovery. Changing only the provider does not reuse a model hint from a different provider. The saved working directory is informational and never changes the current `WorkingDirectory`. Pass current `-Instructions`, skill selections, custom tools, MCP activation, endpoint overrides, and credentials again as needed. A custom endpoint is not saved, so a custom-provider resume needs its current `-ChatUri`. Current approval settings apply; saved grants and process state are not restored. Reinspect files and external state before continuing work.
 
-The raw archive starts with the history available to the current invocation. Resuming a pruned or summary file cannot reconstruct what that file omitted. Context files are completed-answer checkpoints, not crash recovery for actions interrupted mid-execution.
+The raw archive starts with the history available to the current invocation. Resuming a pruned or summary file cannot reconstruct what that file omitted. Normal context exports require a completed answer; failure checkpoints allow the interrupted boundaries described above. Neither restores process state or actions interrupted mid-execution.
 
 ### Automatic in-task compaction
 
@@ -936,6 +955,7 @@ With `-PassThru`, an object:
 | `Messages` | The current transcript as an array, suitable for `-History`. After continuation, this includes retained user messages and the preceding final answer, plus the current task's messages and tool interactions. |
 | `RawMessages` | Available transcript before continuation pruning, including earlier assistant/tool messages. Retained in memory; suitable for `-History` when a larger context is wanted. |
 | `ContextPath` | Absolute path of the last successfully saved context in this invocation, or `$null` if none was saved. |
+| `RecoveryContextPath` | Absolute path of a successfully saved iteration-exhaustion checkpoint, or `$null`. Provider failures throw; inspect the exception's `Data['RecoveryContextPath']` instead. |
 | `Compactions` | Number of passes that retired tool or media content. Zero when disabled or measurement-only. |
 | `CompactedSpans` / `CompactedMedia` | Completed tool spans and historical user media parts retired, respectively. |
 | `ContextArchivePaths` | Absolute paths of successfully published compaction archives; an empty array when none were published. |

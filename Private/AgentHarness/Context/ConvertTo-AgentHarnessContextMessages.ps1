@@ -1,5 +1,5 @@
 function ConvertTo-AgentHarnessContextMessages {
-    param([object[]]$Messages)
+    param([object[]]$Messages, [switch]$AllowInterrupted)
 
     $ErrorActionPreference = 'Stop'
     # Clone before validating, preserving singleton arrays and rejecting excessive depth.
@@ -66,7 +66,11 @@ function ConvertTo-AgentHarnessContextMessages {
         elseif ($item.Contains('tool_call_id')) { throw 'Only tool results may contain tool_call_id.' }
         $result.Add($message)
     }
-    if ($pending.Count -or $result[-1].role -ne 'assistant' -or $result[-1].tool_calls) {
+    if ($pending.Count) { throw 'Context contains unresolved tool calls.' }
+    if ($AllowInterrupted -and $result[-1].role -eq 'system') {
+        throw 'Recovery context must contain a user message, completed tool batch or assistant answer.'
+    }
+    if (-not $AllowInterrupted -and ($result[-1].role -ne 'assistant' -or $result[-1].tool_calls)) {
         throw 'Context must end at a completed assistant answer.'
     }
     , $result.ToArray()

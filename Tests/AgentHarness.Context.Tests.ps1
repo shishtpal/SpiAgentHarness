@@ -189,6 +189,8 @@ try {
     $null = Invoke-AgentHarness 'iteration limit' @contextOptions -Tools $contextTools -MaxIterations 1 -SaveContextPath never.json 3>$null
     Assert-Harness (-not (Test-Path -LiteralPath (Join-Path $contextRoot 'never.json'))) 'Provider failure and iteration exhaustion never save incomplete tool history'
 
+    . (Join-Path $PSScriptRoot 'AgentHarness.Recovery.Tests.ps1')
+
     # Bounded reads reject oversized snapshots before parsing.
     $largePath = Join-Path $contextRoot 'large.json'
     $largeStream = [IO.File]::Create($largePath)

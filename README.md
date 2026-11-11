@@ -26,6 +26,8 @@ User prompts and interactive replies are saved automatically to one JSONL file p
 
 Save conversation context explicitly with `/save-context raw|pruned|summary <path>` at the completion prompt, or `-SaveContextPath <path> -ContextMode Raw|Pruned|Summary`. Resume later with `-ContextPath <path>` and a new prompt. Raw and pruned saves are local; summary saves make an additional model request. See [saving and loading context](Docs/Invoke-AgentHarness.md#saving-and-loading-conversation-context).
 
+Use `-SaveContextOnFailure` to keep raw recovery context on provider failure or iteration exhaustion. No `-SaveContextPath` is needed: the harness generates and reports a unique path under `.agents/harness/checkpoints/`. Resume it with `-ContextPath` and a new prompt; historical tools are not replayed.
+
 Opt into automatic in-task retirement with `-AutoCompact` (default budget: 131072 estimated characters, or 128K). It archives before replacing old tool payloads or historical media and preserves user text and raw history. `-AutoCompact -NoAutoCompactArchive` measures only. See [automatic compaction](Docs/Invoke-AgentHarness.md#automatic-in-task-compaction).
 
 [REA integration](Docs/REA.md) uses an already installed local CLI for static JavaScript/Electron and managed .NET inspection, with a scoped MCP allowlist, a module-owned workflow and an opt-in synthetic smoke test. It installs no software.

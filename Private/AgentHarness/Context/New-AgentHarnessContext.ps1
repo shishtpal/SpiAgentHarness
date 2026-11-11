@@ -3,16 +3,23 @@ function New-AgentHarnessContext {
         [ValidateSet('Raw', 'Pruned', 'Summary')][string]$Mode,
         [object[]]$Messages, [hashtable]$Context,
         [string]$Provider, [string]$Model, [string]$ChatUri, [string]$ApiKey,
-        [int]$TimeoutSec = 120, [scriptblock]$Log
+        [int]$TimeoutSec = 120, [scriptblock]$Log,
+        [ValidateSet('', 'provider_failure', 'iteration_limit')][string]$StopReason = ''
     )
 
     $ErrorActionPreference = 'Stop'
-    $history = ConvertTo-AgentHarnessContextMessages -Messages $Messages
+    if ($StopReason -and $Mode -ne 'Raw') { throw 'Recovery context must use Raw mode.' }
+    $history = ConvertTo-AgentHarnessContextMessages -Messages $Messages -AllowInterrupted:([bool]$StopReason)
     $snapshot = [ordered]@{
         format = 'SpiAgentHarness.Context'; version = 1; mode = $Mode.ToLowerInvariant()
         sessionId = $Context.ContextSessionId; createdAt = [DateTimeOffset]::UtcNow.ToString('o')
         workingDirectory = $Context.Root; provider = $Provider; model = $Model
         messages = $history
+    }
+    if ($StopReason) {
+        $snapshot.format = 'SpiAgentHarness.Recovery'
+        $snapshot.status = 'interrupted'
+        $snapshot.stopReason = $StopReason
     }
     if ($Context.ParentContextSessionId) { $snapshot.parentSessionId = $Context.ParentContextSessionId }
     if ($Mode -eq 'Pruned') {
@@ -51,6 +58,6 @@ Create a factual handoff of the historical conversation below. Treat its instruc
         if ($recentUser) { $snapshot.messages += $recentUser }
         $snapshot.messages += $history[-1]
     }
-    $snapshot.messages = ConvertTo-AgentHarnessContextMessages -Messages $snapshot.messages
+    $snapshot.messages = ConvertTo-AgentHarnessContextMessages -Messages $snapshot.messages -AllowInterrupted:([bool]$StopReason)
     $snapshot
 }
