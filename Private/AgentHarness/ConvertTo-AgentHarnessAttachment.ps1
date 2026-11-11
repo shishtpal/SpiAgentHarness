@@ -1,6 +1,10 @@
 function ConvertTo-AgentHarnessAttachment {
     # Explicit user attachments may live outside the file tools' working directory.
-    param([string]$Path, [string]$WorkingDirectory)
+    param(
+        [string]$Path,
+        [string]$WorkingDirectory,
+        [switch]$PlaceholderMode
+    )
 
     if ([string]::IsNullOrWhiteSpace($Path)) { throw 'Attachment paths cannot be blank.' }
     $fullPath = [IO.Path]::Combine($WorkingDirectory, $Path)
@@ -16,7 +20,11 @@ function ConvertTo-AgentHarnessAttachment {
     if ($extension -in $textExtensions) {
         $encoding = [Text.UTF8Encoding]::new($false, $true)
         $text = [IO.File]::ReadAllText($file.FullName, $encoding)
-        return @{ type = 'text'; text = "Attachment: $($file.Name)`n$text" }
+        $part = @{ type = 'text'; text = "Attachment: $($file.Name)`n$text" }
+        if ($PlaceholderMode) {
+            return @{ Part = $part }
+        }
+        return $part
     }
 
     $mimeTypes = @{
@@ -53,12 +61,28 @@ function ConvertTo-AgentHarnessAttachment {
     $mimeType = $mimeTypes[$extension]
     if (-not $mimeType) { $mimeType = 'application/octet-stream' }
     $bytes = [IO.File]::ReadAllBytes($file.FullName)
+    $sizeMb = [math]::Round($bytes.Length / 1MB, 2)
     $dataUrl = "data:${mimeType};base64,$([Convert]::ToBase64String($bytes))"
     if ($mimeType.StartsWith('image/')) {
-        return @{ type = 'image_url'; image_url = @{ url = $dataUrl } }
+        $contentPart = @{ type = 'image_url'; image_url = @{ url = $dataUrl } }
+        if ($PlaceholderMode) {
+            $placeholder = "[image: $($file.Name) — $sizeMb MB, $mimeType]"
+            return @{ Part = @{ type = 'text'; text = $placeholder }; ContentPart = $contentPart; Placeholder = $placeholder }
+        }
+        return $contentPart
     }
     if ($mimeType.StartsWith('video/')) {
-        return @{ type = 'video_url'; video_url = @{ url = $dataUrl } }
+        $contentPart = @{ type = 'video_url'; video_url = @{ url = $dataUrl } }
+        if ($PlaceholderMode) {
+            $placeholder = "[video: $($file.Name) — $sizeMb MB, $mimeType]"
+            return @{ Part = @{ type = 'text'; text = $placeholder }; ContentPart = $contentPart; Placeholder = $placeholder }
+        }
+        return $contentPart
     }
-    @{ type = 'file'; file = @{ filename = $file.Name; file_data = $dataUrl } }
+    $contentPart = @{ type = 'file'; file = @{ filename = $file.Name; file_data = $dataUrl } }
+    if ($PlaceholderMode) {
+        $placeholder = "[file: $($file.Name) — $sizeMb MB, $mimeType]"
+        return @{ Part = @{ type = 'text'; text = $placeholder }; ContentPart = $contentPart; Placeholder = $placeholder }
+    }
+    $contentPart
 }

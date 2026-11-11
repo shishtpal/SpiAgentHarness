@@ -326,18 +326,40 @@ try {
     Assert-Harness ($attachmentParts[3].video_url.url -eq ('data:video/mp4;base64,' + [Convert]::ToBase64String($videoBytes))) 'Video is sent using video_url with exact base64 bytes'
     Assert-Harness ($attachmentParts[4].text -eq "Attachment: notes.txt`n$attachmentText") 'Text attachments retain filename, Unicode and line breaks'
     Assert-Harness ($attachmentParts[5].file.filename -eq 'unknown.bin' -and $attachmentParts[5].file.file_data -eq 'data:application/octet-stream;base64,AAH+/w==') 'Unknown binary files use the generic file content type'
-    Assert-Harness (($attachmentResult.Messages[1].content | ConvertTo-Json -Depth 10 -Compress) -eq ($attachmentParts | ConvertTo-Json -Depth 10 -Compress)) 'PassThru retains the serialized multimodal content'
+    Assert-Harness ($attachmentResult.Messages[1].content -is [array] -and $attachmentResult.Messages[1].content[0].text -eq 'Compare the attachments' -and $attachmentResult.Messages[1].content[1].text -like '`[image: image*' -and $attachmentResult.Messages[1].content[2].text -like '`[file: report.pdf*' -and $attachmentResult.Messages[1].content[3].text -like '`[video: clip.mp4*' -and $attachmentResult.Messages[1].content[4].text -eq "Attachment: notes.txt`n$attachmentText" -and $attachmentResult.Messages[1].content[5].text -like '`[file: unknown.bin*') 'PassThru retains attachment placeholders, not base64 media'
 
     $attachmentHistoryBefore = $attachmentResult.Messages | ConvertTo-Json -Depth 20 -Compress
     Set-HarnessResponses @((New-HarnessResponse 'follow-up with media'))
     $null = Invoke-AgentHarness 'Compare again' @basic -History $attachmentResult.Messages -Attachment $imagePath
     $attachmentMessages = @(Get-HarnessRequests)[0].Body.messages
-    Assert-Harness ($attachmentMessages[1].content.Count -eq 6 -and $attachmentMessages[3].content.Count -eq 2) 'History retains previous attachments and accepts a new attachment using the singular alias'
-    Assert-Harness (($attachmentResult.Messages | ConvertTo-Json -Depth 20 -Compress) -eq $attachmentHistoryBefore) 'Attachment history is not mutated by follow-ups'
+    Assert-Harness ($attachmentMessages[1].content.Count -eq 6 -and $attachmentMessages[1].content[1].text -like '`[image:*' -and $null -eq $attachmentMessages[1].content[1].image_url -and $attachmentMessages[3].content.Count -eq 2 -and $attachmentMessages[3].content[0].text -eq 'Compare again' -and $attachmentMessages[3].content[1].image_url.url -match '^data:image/png;base64,') 'History retains previous attachment placeholders and injects new attachment media for the provider'
+    Assert-Harness (($attachmentResult.Messages | ConvertTo-Json -Depth 20 -Compress) -eq $attachmentHistoryBefore) 'Attachment history placeholders are not mutated by follow-ups'
+
+    # JSON-loaded history uses PSCustomObject messages, including tool protocol metadata.
+    $objectHistory = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject @(
+            @{ role = 'user'; content = 'Previous question' },
+            @{ role = 'assistant'; content = $null; tool_calls = @((New-HarnessCall inspect '{}' 'history_inspect')) },
+            @{ role = 'tool'; tool_call_id = 'history_inspect'; name = 'inspect'; content = 'Previous evidence' },
+            @{ role = 'assistant'; content = 'Previous answer' }
+        ) -Depth 20)
+    $objectHistoryBefore = ConvertTo-Json -InputObject $objectHistory -Depth 20 -Compress
+    foreach ($preference in 'Continue', 'Stop') {
+        $ErrorActionPreference = $preference
+        Set-HarnessResponses @((New-HarnessResponse 'Object history accepted'))
+        $null = Invoke-AgentHarness 'Inspect new media' @basic -History $objectHistory -Attachments $imagePath
+        $objectMessages = @(Get-HarnessRequests)[0].Body.messages
+        Assert-Harness ((ConvertTo-Json -InputObject @($objectMessages[1..4]) -Depth 20 -Compress) -ceq $objectHistoryBefore) 'Media injection preserves object history roles, contents and tool-call metadata under Continue and Stop'
+        Assert-Harness ($objectMessages[-1].content[1].image_url.url -eq $attachmentParts[1].image_url.url) 'Object history does not prevent injecting new attachment bytes'
+        Assert-Harness ((ConvertTo-Json -InputObject $objectHistory -Depth 20 -Compress) -ceq $objectHistoryBefore) 'Media injection leaves caller object history unchanged'
+    }
+    $ErrorActionPreference = 'Stop'
+
     $outsideRoot = $basic.Clone(); $outsideRoot.WorkingDirectory = $mediaDirectory
+
     Set-HarnessResponses @((New-HarnessResponse))
     $null = Invoke-AgentHarness 'Explicit external attachment' @outsideRoot -AttachmentPath $pdfPath
     Assert-Harness (@(Get-HarnessRequests)[0].Body.messages[1].content[1].file.filename -eq 'report.pdf') 'Explicit absolute attachments may live outside the tool working directory'
+
     Set-HarnessResponses @((New-HarnessResponse))
     $null = Invoke-AgentHarness 'No attachments' @basic -Attachments @()
     Assert-Harness (@(Get-HarnessRequests)[0].Body.messages[1].content -is [string]) 'An empty attachment array keeps the plain-text request format'
@@ -363,7 +385,8 @@ try {
     $null = Invoke-AgentHarness 'Inspect media' @basic -Attachments $imagePath, $pdfPath, $videoPath -Tools $attachmentTool
     $attachmentRequests = @(Get-HarnessRequests)
     $sentContent = @($attachmentRequests | ForEach-Object { ConvertTo-Json -InputObject $_.Body.messages[1].content -Depth 10 -Compress })
-    Assert-Harness ($attachmentRequests.Count -eq 3 -and @($sentContent | Select-Object -Unique).Count -eq 1) 'Retries and tool round trips preserve identical attachments'
+    Assert-Harness ($attachmentRequests.Count -eq 3 -and $sentContent[0] -ceq $sentContent[1] -and $attachmentRequests[0].Body.messages[1].content[1].image_url.url -eq $attachmentParts[1].image_url.url) 'Retries preserve identical attachments until the model accepts the turn'
+    Assert-Harness (($attachmentRequests[-1].Body.messages[1].content.type -join ',') -eq 'text,text,text,text' -and $attachmentRequests[-1].Body.messages[1].content[1].text -like '`[image:*') 'Later tool turns retain attachment placeholders without resending media'
     Assert-Harness ($attachmentRequests[-1].Body.messages[-1].content -eq 'synthetic tool result') 'Attachment prompts remain compatible with tool execution'
     Set-HarnessResponses @((New-HarnessApiError 400), (New-HarnessResponse 'media fallback'))
     $null = Invoke-AgentHarness 'Inspect with fallback' -Provider TestA -WorkingDirectory $fixture -Attachments $imagePath -Quiet -NoBuiltinTools -NoModelRecovery
@@ -408,9 +431,15 @@ Compare @attach("media/image [1].PNG") @attach('report.pdf') @attach(media/clip.
         $script:ClipboardReads = 0
         $script:ClipboardFailure = $null
         function script:Get-AgentHarnessClipboardImage {
+            param([switch]$PlaceholderOnly)
             $script:ClipboardReads++
             if ($script:ClipboardFailure) { throw $script:ClipboardFailure }
-            @{ type = 'image_url'; image_url = @{ url = $script:ClipboardDataUrl } }
+            $part = @{ type = 'image_url'; image_url = @{ url = $script:ClipboardDataUrl } }
+            if ($PlaceholderOnly) {
+                $placeholder = '[image: clipboard — 0 MB, image/png]'
+                return @{ PlaceholderPart = @{ type = 'text'; text = $placeholder }; ContentPart = $part; Placeholder = $placeholder }
+            }
+            $part
         }
         (Get-Command Get-AgentHarnessClipboardImage).ScriptBlock
     } $attachmentParts[1].image_url.url
@@ -434,7 +463,7 @@ Compare @attach("media/image [1].PNG") @attach('report.pdf') @attach(media/clip.
         $clipboardReads = & $module { $script:ClipboardReads }
         Set-HarnessResponses @((New-HarnessResponse))
         $null = Invoke-AgentHarness 'Explain again' @basic -History $clipboardResult.Messages
-        Assert-Harness ((& $module { $script:ClipboardReads }) -eq $clipboardReads -and @(Get-HarnessRequests)[0].Body.messages[1].content[1].image_url.url -eq $attachmentParts[1].image_url.url) 'History retains clipboard images without reading the clipboard again'
+        Assert-Harness ((& $module { $script:ClipboardReads }) -eq $clipboardReads -and @(Get-HarnessRequests)[0].Body.messages[1].content[1].text -like '`[image: clipboard*') 'History retains clipboard placeholders without reading the clipboard again'
         Set-HarnessResponses @((New-HarnessApiError 429), (New-HarnessResponse 'clipboard retried'))
         $null = Invoke-AgentHarness 'Retry this @clipboard' @basic
         $clipboardRequests = @(Get-HarnessRequests)
@@ -1429,7 +1458,7 @@ exit 7
     $mediaContinuation = @(Get-HarnessRequests)[2].Body.messages
     Assert-Harness (($mediaContinuation.role -join ',') -eq 'system,user,user,assistant,user') 'Attachment continuation compacts previous assistant and tool messages'
     Assert-Harness ($mediaContinuation[1].content.Count -eq 6 -and $mediaContinuation[2].content.Count -eq 2) 'Completion compaction retains both historic and current attachment arrays'
-    Assert-Harness ($mediaContinuation[1].content[3].video_url.url -eq $attachmentParts[3].video_url.url -and $mediaContinuation[2].content[1].image_url.url -eq $attachmentParts[1].image_url.url) 'Compaction preserves the exact original image and video bytes'
+    Assert-Harness ($mediaContinuation[1].content[3].text -like '`[video:*' -and $mediaContinuation[2].content[1].text -like '`[image:*') 'Continuation preserves image and video placeholders after their first accepted turn'
     Assert-Harness ($mediaContinuation[-1].content -is [string] -and $mediaContinuation[-1].content -eq 'Follow up on those attachments' -and $mediaContinued.Answer -eq 'continued media answer') 'Attachments stay on their original prompts without duplication on the next task'
     Assert-Harness (($attachmentResult.Messages | ConvertTo-Json -Depth 20 -Compress) -eq $attachmentHistoryBefore) 'Continuation does not mutate caller attachment history'
 
@@ -1444,7 +1473,8 @@ exit 7
     $inlineRequests = @(Get-HarnessRequests)
     Assert-Harness ($inlineContinued.Iterations -eq 3 -and $inlineContinued.Answer -eq 'follow-up complete') 'Attachments can be added during an active conversation'
     Assert-Harness (($inlineRequests[1].Body.messages[-1].content.type -join ',') -eq 'text,image_url,file,video_url' -and $inlineRequests[1].Body.messages[-1].content[0].text -eq 'Review these') 'Continuation attaches images, files and videos from typed markers'
-    Assert-Harness ($inlineRequests[2].Body.messages[2].content[1].image_url.url -eq $attachmentParts[1].image_url.url -and $inlineRequests[2].Body.messages[-1].content -eq 'What else is visible?') 'Later continuation retains inline attachments without copying them onto new prompts'
+    Assert-Harness ($inlineRequests[1].Body.messages[-1].content[1].image_url.url -eq $attachmentParts[1].image_url.url -and $inlineRequests[1].Body.messages[-1].content[2].file.file_data -eq $attachmentParts[2].file.file_data -and $inlineRequests[1].Body.messages[-1].content[3].video_url.url -eq $attachmentParts[3].video_url.url) 'Continuation injects the exact image, file and video bytes'
+    Assert-Harness ($inlineRequests[2].Body.messages[2].content[1].text -like '`[image:*' -and $inlineRequests[2].Body.messages[-1].content -eq 'What else is visible?') 'Later continuation retains inline attachment placeholders'
 
     foreach ($preference in 'Continue', 'Stop') {
         $ErrorActionPreference = $preference
@@ -1501,7 +1531,7 @@ exit 7
         $clipboardRequests = @(Get-HarnessRequests)
         Assert-Harness ($clipboardContinued.Answer -eq 'screenshot follow-up' -and $clipboardRequests.Count -eq 3 -and $clipboardContinued.Iterations -eq 3) 'An empty clipboard reprompts before successfully attaching a screenshot in the running conversation'
         Assert-Harness ($clipboardRequests[1].Body.messages[-1].content[1].image_url.url -eq $attachmentParts[1].image_url.url -and $clipboardRequests[1].Body.messages[-2].content -eq 'ready for screenshot') 'Clipboard retry preserves the previous final answer and includes the PNG screenshot'
-        Assert-Harness ((& $module { $script:ClipboardReads }) -eq 2 -and $clipboardRequests[2].Body.messages[2].content[1].image_url.url -eq $attachmentParts[1].image_url.url) 'Later turns retain the captured screenshot after the clipboard changes'
+        Assert-Harness ((& $module { $script:ClipboardReads }) -eq 2 -and $clipboardRequests[2].Body.messages[2].content[1].text -like '`[image: clipboard*') 'Later turns retain the screenshot placeholder without recapturing the changed clipboard'
         Assert-Harness (($clipboardInfo.MessageData -join "`n").Contains('No image found in the clipboard.')) 'Missing screenshot error is visible during the conversation'
     }
     finally {
@@ -1558,11 +1588,10 @@ exit 7
     $viewToolMsg = @($viewResult.Messages | Where-Object role -eq tool)[0]
     $expectedImageUrl = 'data:image/png;base64,' + [Convert]::ToBase64String($imageBytes)
     Assert-Harness ($viewResult.Answer -eq 'image seen') 'view_image tool round trip completes'
-    Assert-Harness ($viewToolMsg.content -is [array] -and $viewToolMsg.content.Count -eq 2) 'view_image content is a two-part array'
-    Assert-Harness ($viewToolMsg.content[0].type -eq 'text' -and $viewToolMsg.content[0].text -like 'Image: image*') 'view_image first part is descriptive text'
-    Assert-Harness ($viewToolMsg.content[1].type -eq 'image_url' -and $viewToolMsg.content[1].image_url.url -eq $expectedImageUrl) 'view_image second part is the correct base64 image_url'
+    Assert-Harness ($viewToolMsg.content -is [string] -and $viewToolMsg.content -like '`[image: image*') 'view_image retains a descriptive placeholder in history'
     $viewRequest = @(Get-HarnessRequests)[-1]
     Assert-Harness ($viewRequest.Body.messages[-1].role -eq 'tool' -and $viewRequest.Body.messages[-1].content -is [array]) 'view_image multimodal content sent in subsequent request'
+    Assert-Harness ($viewRequest.Body.messages[-1].content[0].text -like 'Image: image*' -and $viewRequest.Body.messages[-1].content[1].image_url.url -eq $expectedImageUrl) 'view_image injects the description and exact image bytes'
 
     Set-HarnessResponses @((New-HarnessResponse '' @((New-HarnessCall view_image '{"path":"../outside.png"}'))), (New-HarnessResponse 'done'))
     $viewEscape = Invoke-AgentHarness 'Escape' @viewImageOptions -PassThru
@@ -1588,8 +1617,20 @@ exit 7
     Set-HarnessResponses @((New-HarnessResponse '' @((New-HarnessCall multi_out '{}'))), (New-HarnessResponse 'custom multimodal done'))
     $customMultiResult = Invoke-AgentHarness 'Multi' @viewImageOptions -Tools $customMultiTool -NoBuiltinTools -PassThru
     $customToolMsg = @($customMultiResult.Messages | Where-Object role -eq tool)[0]
-    Assert-Harness ($customToolMsg.content -is [array] -and $customToolMsg.content[0].text -eq 'custom text part') 'Custom tool ContentParts produces multimodal tool result'
-    Assert-Harness (@(Get-HarnessRequests)[-1].Body.messages[-1].content -is [array]) 'Custom ContentParts sent as array to provider'
+    $customReq = @(Get-HarnessRequests)[-1]
+    Assert-Harness ($customToolMsg.content -is [string] -and $customToolMsg.content -like '`[image: custom text part*') 'Custom multimodal tool results keep placeholder in history/PassThru'
+    Assert-Harness ($customReq.Body.messages[-1].role -eq 'tool' -and $customReq.Body.messages[-1].content -is [array] -and $customReq.Body.messages[-1].content[0].text -eq 'custom text part') 'Custom multimodal tool ContentParts are injected into request'
+
+    Set-HarnessResponses @(
+        (New-HarnessResponse '' @((New-HarnessCall multi_out '{}'))),
+        (New-HarnessApiError 429),
+        (New-HarnessResponse '' @((New-HarnessCall inspect '{}'))),
+        (New-HarnessResponse 'media consumed')
+    )
+    $null = Invoke-AgentHarness 'Inspect custom media once' @viewImageOptions -Tools ($customMultiTool + $attachmentTool) -NoBuiltinTools
+    $customRequests = @(Get-HarnessRequests)
+    Assert-Harness ($customRequests.Count -eq 4 -and $customRequests[1].Body.messages[-1].content[1].image_url.url -ceq 'data:image/png;base64,abc=' -and (ConvertTo-Json -InputObject $customRequests[1].Body.messages -Depth 20 -Compress) -ceq (ConvertTo-Json -InputObject $customRequests[2].Body.messages -Depth 20 -Compress)) 'Tool media bytes survive retries of the receiving model turn'
+    Assert-Harness ($customRequests[3].Body.messages[3].content -ceq '[image: custom text part]') 'Tool media becomes a placeholder after the receiving turn succeeds'
 
     . (Join-Path $PSScriptRoot 'AgentHarness.Mcp.Tests.ps1')
     . (Join-Path $PSScriptRoot 'AgentHarness.Decisions.Tests.ps1')

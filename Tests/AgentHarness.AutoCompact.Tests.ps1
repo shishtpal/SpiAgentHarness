@@ -312,7 +312,7 @@ $one = Invoke-CompactFixture (New-CompactFixtureHistory -Spans 1) $isolatedOne
 $two = Invoke-CompactFixture (New-CompactFixtureHistory -Spans 1) $isolatedTwo
 Assert-Harness ($one.Changed -and $two.Changed -and [IO.Path]::GetDirectoryName($one.ArchivePath) -cne [IO.Path]::GetDirectoryName($two.ArchivePath)) 'Invocations sharing an archive root keep independent session directories'
 
-# Continuation makes the previous task's media historical while raw history retains original bytes.
+# One-turn attachments remain placeholders during continuation without needing media compaction.
 $savedCompactHost = & $module { ${function:Read-Host} }
 try {
     & $module {
@@ -327,8 +327,8 @@ try {
     Set-HarnessResponses @((New-HarnessResponse 'first task complete'), (New-HarnessResponse 'continuation complete'))
     $continuedCompact = Invoke-AgentHarness 'First media task' @continueOptions -Attachments $continuationImage -AutoCompact -AutoCompactBudget $continueBudget -PassThru 3>$null 6>$null
     $continuedRequests = @(Get-HarnessRequests)
-    Assert-Harness ($continuedRequests.Count -eq 2 -and $continuedRequests[0].Body.messages[1].content[1].type -ceq 'image_url' -and $continuedRequests[1].Body.messages[1].content[1].type -ceq 'text') 'Continuation rebuild makes old task media eligible at the next request boundary'
-    Assert-Harness ($continuedCompact.RawMessages[1].content[1].type -ceq 'image_url' -and $continuedCompact.CompactedMedia -eq 1) 'Continuation media retirement preserves original raw attachment'
+    Assert-Harness ($continuedRequests.Count -eq 2 -and $continuedRequests[0].Body.messages[1].content[1].type -ceq 'image_url' -and $continuedRequests[1].Body.messages[1].content[1].text -like '`[image: synthetic.png*') 'Continuation retains the placeholder after the original media was sent once'
+    Assert-Harness ($continuedCompact.RawMessages[1].content[1].text -like '`[image: synthetic.png*' -and $continuedCompact.CompactedMedia -eq 0 -and $continuedCompact.Compactions -eq 0) 'One-turn media leaves placeholders in raw history without creating compaction archives'
 
     # A skill-prompt refresh and guidance are both visible to the one preflight.
     $refreshTools = @{ refresh = @{ Script = {

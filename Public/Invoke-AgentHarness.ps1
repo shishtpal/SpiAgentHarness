@@ -77,7 +77,8 @@
     absolute. Images and videos are encoded as data URLs; text files are included
     as text, and other files use file content parts. Attachment is an alias.
     Files can also be added with @attach("path/to/file") inside any prompt.
-    Attachments are retained in History and when continuing with another task.
+    Media is sent on the next model turn, including retries, then retained as
+    placeholders in History. Attach it again to inspect it on a later turn.
 
 .PARAMETER NoPromptHistory
     Disable automatic local input recording under WorkingDirectory/.agents/prompts.
@@ -423,7 +424,7 @@ function Invoke-AgentHarness {
     $systemPrompt = Get-AgentHarnessSystemPrompt -WorkingDirectory $ctx.Root `
         -AdditionalInstructions $Instructions -NoAgentsFile:$NoAgentsFile -SkillState $ctx.SkillState -AgentProfile $AgentProfile -PretendAgent $PretendAgent
     $messages = New-AgentHarnessMessages -SystemPrompt $systemPrompt -Prompt $promptText -History $History `
-        -Attachments $Attachments -WorkingDirectory $ctx.Root
+        -Attachments $Attachments -WorkingDirectory $ctx.Root -PendingInjections $ctx.AutoCompact.PendingInjections
     $ctx.AutoCompact.ProtectedMessages.Add($messages[-1])
     # Keep history before continuation pruning; only explicit saves write it to disk.
     $rawMessages = [Collections.Generic.List[object]]::new()
@@ -490,6 +491,11 @@ function Invoke-AgentHarness {
                 }
             }
 
+            # One-turn injections were applied for this request; clear before next request/tool media.
+            if ($ctx.AutoCompact -and $ctx.AutoCompact.PendingInjections) {
+                $ctx.AutoCompact.PendingInjections.Clear()
+            }
+
             $calls = @(ConvertTo-AgentHarnessToolCall -Calls $msg.tool_calls)
             # No tool calls -> this is the final answer
             if (-not $calls.Count) {
@@ -529,7 +535,8 @@ function Invoke-AgentHarness {
                         $systemPrompt = Get-AgentHarnessSystemPrompt -WorkingDirectory $ctx.Root `
                             -AdditionalInstructions $Instructions -NoAgentsFile:$NoAgentsFile -SkillState $ctx.SkillState -AgentProfile $AgentProfile -PretendAgent $PretendAgent
                         $nextMessages = New-AgentHarnessMessages -SystemPrompt $systemPrompt -Prompt $nextPrompt `
-                            -History $messages.ToArray() -KeepLatestAnswer -WorkingDirectory $ctx.Root
+                            -History $messages.ToArray() -KeepLatestAnswer -WorkingDirectory $ctx.Root `
+                            -PendingInjections $ctx.AutoCompact.PendingInjections
                         break
                     }
                     catch {
@@ -572,6 +579,15 @@ function Invoke-AgentHarness {
                 }
                 $messages.Add($result)
                 $rawMessages.Add($result)
+                if ($ctx._PendingToolMedia) {
+                    $ctx.AutoCompact.PendingInjections.Add(@{
+                        MessageIndex = $messages.Count - 1
+                        PartIndex    = $null
+                        ContentPart  = $ctx._PendingToolMedia.ContentPart
+                        Placeholder  = $ctx._PendingToolMedia.Placeholder
+                    })
+                    $ctx._PendingToolMedia = $null
+                }
             }
             if ($ctx.SkillPromptDirty) {
                 $messages[0].content = Get-AgentHarnessSystemPrompt -WorkingDirectory $ctx.Root `

@@ -15,6 +15,7 @@ function New-AgentHarnessCompactionState {
         ProtectedMessages = [Collections.Generic.List[object]]::new()
         RetiredMessages = [Collections.Generic.HashSet[object]]::new()
         Notices = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        PendingInjections = [Collections.Generic.List[object]]::new()
     }
 }
 

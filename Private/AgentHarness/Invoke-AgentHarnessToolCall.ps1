@@ -34,10 +34,37 @@ function Invoke-AgentHarnessToolCall {
             }
             $result = if ($null -ne $multimodal) {
                 # Use the text parts for display and character-limit accounting.
-                (@($multimodal | Where-Object { $_.type -eq 'text' } | ForEach-Object { $_.text }) -join "`n")
+                (@($multimodal | Where-Object { $_.type -eq 'text' } | ForEach-Object { [string]$_.text }) -join "`n")
             }
             elseif ($raw.Count -eq 1 -and $raw[0] -is [string]) { $raw[0] }
             else { ($raw | Out-String -Width 200).Trim("`r", "`n") }
+
+            # Stage multimodal media for on-demand injection; keep only placeholder text in messages.
+            if ($null -ne $multimodal -and $Context) {
+                $textInfo = (@($multimodal | Where-Object { $_.type -eq 'text' } | ForEach-Object { [string]$_.text }) -join "`n").Trim()
+                $mediaParts = @($multimodal | Where-Object { $_.type -ne 'text' })
+                $placeholder = $null
+                if ($mediaParts.Count -eq 1 -and $mediaParts[0].type -eq 'image_url') {
+                    $m = [regex]::Match($textInfo, '^Image:\s*(.+?)\s*\((\d+)\s*bytes,\s*([^)]+)\)', [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+                    if ($m.Success) {
+                        $sizeMb = [math]::Round(([double]$m.Groups[2].Value / 1MB), 2)
+                        $placeholder = "[image: $($m.Groups[1].Value) — $sizeMb MB, $($m.Groups[3].Value.Trim())]"
+                    }
+                }
+                if (-not $placeholder -and $mediaParts.Count -gt 0) {
+                    $first = $mediaParts[0]
+                    $label = switch ($first.type) { 'image_url' { 'image' } 'video_url' { 'video' } 'file' { 'file' } default { 'media' } }
+                    $pathHint = if ($textInfo) { ($textInfo -split "`n")[0] } else { 'attachment' }
+                    $placeholder = "[$label`: $pathHint]"
+                }
+                if ($placeholder) {
+                    $Context['_PendingToolMedia'] = @{
+                        ContentPart = @($multimodal)
+                        Placeholder = $placeholder
+                    }
+                    $result = $placeholder
+                }
+            }
         }
         catch { $result = "ERROR: $($_.Exception.Message)"; $multimodal = $null }
     }
@@ -54,6 +81,5 @@ function Invoke-AgentHarnessToolCall {
     $color = if ($result -like 'ERROR:*' -or $result -match '^exit code: (?!0\b)-?\d+') { 'Red' } else { 'Cyan' }
     Write-AgentHarnessBlock -Title ("Result: {0} ({1:N0} chars)" -f $name, $result.Length) `
         -Text $result -Color $color -Quiet:$Context.Quiet
-    $content = if ($null -ne $multimodal) { $multimodal } else { $result }
-    @{ role = 'tool'; tool_call_id = $Call.id; name = $name; content = $content }
+    @{ role = 'tool'; tool_call_id = $Call.id; name = $name; content = $result }
 }

@@ -27,19 +27,55 @@ function Invoke-AgentHarnessTurn {
             if (-not $key -and $connection.KeyEnvVar) {
                 & $Log "   note: `$env:$($connection.KeyEnvVar) is not set; sending without Authorization" 'Yellow'
             }
-            $body = @{ model = $candidate.Id; messages = $Messages }
-            if ($ToolSpecs.Count) {
-                $body['tools'] = $ToolSpecs
-                if (-not $connection.OmitToolChoice) { $body['tool_choice'] = 'auto' }
-            }
-            if ($null -ne $Temperature) { $body['temperature'] = [double]$Temperature }
             if (-not $preparedResend -and $CompactionContext.AutoCompact.Enabled) {
                 $null = Invoke-AgentHarnessCompaction -Messages $Messages -Context $CompactionContext `
                     -Provider $candidate.Provider -Model $candidate.Id -Log $Log
             }
             $preparedResend = $false
+
+            # One-turn media injection: send originals to model, keep placeholders in $Messages.
+            $requestMessages = $Messages
+            if ($CompactionContext -and $CompactionContext.AutoCompact -and $CompactionContext.AutoCompact.PendingInjections -and $CompactionContext.AutoCompact.PendingInjections.Count) {
+                $requestMessages = [Collections.Generic.List[object]]::new()
+                foreach ($m in $Messages) {
+                    $copy = @{}
+                    if ($m -is [Collections.IDictionary]) {
+                        foreach ($k in $m.Keys) { $copy[$k] = $m[$k] }
+                    }
+                    else {
+                        foreach ($property in $m.PSObject.Properties) { $copy[$property.Name] = $property.Value }
+                    }
+                    $requestMessages.Add($copy)
+                }
+                foreach ($inj in @($CompactionContext.AutoCompact.PendingInjections)) {
+                    $mi = [int]$inj.MessageIndex
+                    if ($mi -lt 0 -or $mi -ge $requestMessages.Count) { continue }
+                    $msgCopy = @{}
+                    foreach ($k in $requestMessages[$mi].Keys) { $msgCopy[$k] = $requestMessages[$mi][$k] }
+                    if ($null -eq $inj.PartIndex) {
+                        $msgCopy.content = $inj.ContentPart
+                    }
+                    else {
+                        $parts = [Collections.Generic.List[object]]::new()
+                        foreach ($p in @($msgCopy.content)) { $parts.Add($p) }
+                        $pi = [int]$inj.PartIndex
+                        if ($pi -ge 0 -and $pi -lt $parts.Count) { $parts[$pi] = $inj.ContentPart }
+                        $msgCopy.content = $parts.ToArray()
+                    }
+                    $requestMessages[$mi] = $msgCopy
+                }
+            }
+
+            $body = @{ model = $candidate.Id; messages = $requestMessages }
+            if ($ToolSpecs.Count) {
+                $body['tools'] = $ToolSpecs
+                if (-not $connection.OmitToolChoice) { $body['tool_choice'] = 'auto' }
+            }
+            if ($null -ne $Temperature) { $body['temperature'] = [double]$Temperature }
             & $Log "[turn $Iteration] -> [$($candidate.Provider)] $($candidate.Id)" 'Cyan'
+
             $response = Invoke-AgentHarnessChat -Uri $connection.ChatUri -ApiKey $key -Body $body -TimeoutSec $TimeoutSec -Log $Log -RequestHeaders $RequestHeaders
+
             $State.Locked = $true
             return [pscustomobject]@{
                 Response = $response; Candidate = $candidate; ElapsedMilliseconds = $timer.ElapsedMilliseconds

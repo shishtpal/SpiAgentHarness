@@ -278,10 +278,10 @@ Invoke-AgentHarness 'Compare these materials' -Provider OpenRouter -Pick -All `
 Invoke-AgentHarness 'Summarise these notes' -Attachments './notes.txt', './data.csv' `
     -NoBuiltinTools -NoCompletionPrompt
 
-# Retain attachments for a follow-up without reading the files again.
+# Attach the image again when a follow-up needs to inspect its contents.
 $r = Invoke-AgentHarness 'Describe this image' -Attachments './photo.png' `
     -Provider OpenRouter -Pick -All -PassThru -NoCompletionPrompt
-Invoke-AgentHarness 'What text is visible?' -History $r.Messages `
+Invoke-AgentHarness 'What text is visible?' -History $r.Messages -Attachments './photo.png' `
     -Provider $r.Provider -Model $r.Model -NoCompletionPrompt
 ```
 
@@ -312,7 +312,7 @@ Explain the error in this screenshot @clipboard
 
 `@clipboard()` also works. You can combine it with file markers, such as `Compare this @clipboard with @attach("./reference.png")`, or submit `@clipboard` alone to review the screenshot. Use `@@clipboard` to send the marker as literal text.
 
-The image is captured when you submit the prompt, converted to PNG in memory, and attached as an `image_url` data URL. No image file is created, and the clipboard is left unchanged. Repeated markers within one prompt share a single snapshot. History, retries and continued tasks retain that snapshot even if you later copy something else. Clipboard access occurs only when an unescaped clipboard marker is submitted. An empty clipboard or clipboard containing only text produces an error and lets you retry during a running conversation.
+The image is captured when you submit the prompt, converted to PNG in memory, and attached as an `image_url` data URL. No image file is created, and the clipboard is left unchanged. Repeated markers within one prompt share a single snapshot. Retries and model fallback reuse that snapshot until the next model turn succeeds. Subsequent turns and history retain a text placeholder. Submit another `@clipboard` marker to inspect the current clipboard again. Clipboard access occurs only when an unescaped clipboard marker is submitted. An empty clipboard or clipboard containing only text produces an error and lets you retry during a running conversation.
 
 This feature requires Windows and an accessible image clipboard. It uses a dedicated STA runspace, as required by the [Windows Forms clipboard API](https://learn.microsoft.com/en-us/dotnet/api/system.windows.forms.clipboard.getimage). On other platforms, save the screenshot and use `@attach("path")`. The selected provider/model must support image input. After updating the module, reload it before starting a conversation to enable the new syntax.
 
@@ -333,7 +333,7 @@ The prompt becomes an ordered content array: the prompt text first, then each at
 
 These are serialization rules; the selected provider and model determine which formats they can process. The harness does not filter models by attachment capabilities, convert media, extract document contents locally, or split large files. Choose a compatible model with `-Model` or `-Pick`; automatic fallback and recovery keep the same attachment content. Image and video requests use the formats documented by OpenRouter for [images](https://openrouter.ai/docs/guides/overview/multimodal/image-understanding) and [videos](https://openrouter.ai/docs/guides/overview/multimodal/videos); document requests use its [file content format](https://openrouter.ai/docs/guides/overview/multimodal/pdfs). Other compatible endpoints may support a subset of these content types.
 
-Attachments are read once per submitted prompt and retained inline in `-PassThru`'s `.Messages`, through tool calls, retries, `-History` and completion continuations. Continuing retains attachments on their original user messages; it does not duplicate them on each new prompt. To attach more files, use `@attach("path/to/file")` at the next-task prompt, or invoke the command again with `-History` and `-Attachments`. Treat saved transcripts as copies of the attached files. Contents are sent in full to the selected provider; `-MaxToolOutputChars` only limits tool output. Base64 increases request size, and provider limits and processing charges apply.
+Attachments are read once per submitted prompt. Image, video and binary file contents are sent on the next model turn, including its HTTP retries and model fallback. After that turn succeeds, later tool turns, `-PassThru`'s `.Messages` and `.RawMessages`, saved contexts and completion continuations retain text placeholders containing the filename, size and media type. Text attachments retain their full text. To inspect media again, use `@attach("path/to/file")` at the next-task prompt, or invoke the command again with `-History` and `-Attachments`. Clipboard media must be captured again with `@clipboard`. Multimodal tool results follow the same one-turn rule. Contents are sent in full to the selected provider; `-MaxToolOutputChars` only limits tool output. Base64 increases request size, and provider limits and processing charges apply. Media already present in caller-supplied history is preserved as supplied until normal continuation pruning or AutoCompact applies.
 
 ---
 
