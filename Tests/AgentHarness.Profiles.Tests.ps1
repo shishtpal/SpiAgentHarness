@@ -22,7 +22,7 @@ try {
             $expectedPersona = if ($profileName -eq 'ClaudeCode') { 'Claude Code' } else { $profileName }
             Assert-Harness ($profileResult.Answer -eq 'profile answer' -and $profileText.StartsWith("You are $expectedPersona,") -and $profileText.Contains($marker) -and $profileResult.PersonaName -ceq $expectedPersona) "$profileName reaches the request and names the persona under $preference"
             Assert-Harness ($profileText.IndexOf($marker) -lt $profileText.IndexOf('Synthetic profile repository rule.') -and $profileText.EndsWith('Synthetic user rule.')) 'Profile precedes repository and additional user instructions'
-            Assert-Harness ($profileText.Contains('Each call starts a separate -NoProfile, -NonInteractive process') -and $profileText.Contains('not assume upstream tools') -and $profileText.Contains('take precedence over profile guidance')) 'Profile keeps actual execution semantics and instruction priority'
+            Assert-Harness ($profileText.Contains('Each launch starts a separate -NoProfile, -NonInteractive process') -and $profileText.Contains('start_powershell') -and $profileText.Contains('not assume upstream tools') -and $profileText.Contains('take precedence over profile guidance')) 'Profile keeps actual execution semantics and instruction priority'
             Assert-Harness (-not $profileRequest.Headers.ContainsKey('HTTP-Referer') -and $profileRequest.Body.model -eq 'custom-model') 'Behavior selection does not change attribution or model routing'
         }
         Set-HarnessResponses @((New-HarnessResponse))

@@ -234,22 +234,8 @@ function Get-AgentHarnessBuiltinTools {
     }
 
     if ($AllowShell) {
-        $tools['run_powershell'] = @{
-            Description = 'Execute raw PowerShell code in the working directory (60s timeout). The user confirms each command unless YOLO mode is enabled. Returns exit code, stdout and stderr.'
-            RequiresApproval = $true
-            Parameters  = @{
-                type       = 'object'
-                properties = @{ command = @{ type = 'string'; description = 'PowerShell command text' } }
-                required   = @('command')
-            }
-            Script      = {
-                param($a, $ctx)
-                if (-not $a.command) { throw 'command is required' }
-                if (-not (Confirm-AgentHarnessAction $ctx "run PowerShell: $($a.command)")) { return 'ERROR: the user denied this command.' }
-
-                Invoke-AgentHarnessShell -Command $a.command -WorkingDirectory $ctx.Root
-            }
-        }
+        $shellTools = Get-AgentHarnessShellTools
+        foreach ($name in $shellTools.Keys) { $tools[$name] = $shellTools[$name] }
     }
 
     if ($AllowSubAgents) {

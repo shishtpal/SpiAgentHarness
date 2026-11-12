@@ -304,7 +304,7 @@ function Invoke-AgentHarness {
         [switch]$NoBuiltinTools,
         [switch]$AllowWrite = $true,       # -AllowWrite:$false disables write_file and edit_file
         [switch]$AllowShell = $true,       # compatibility; -AllowShell:$false disables it
-        [switch]$NoShellTool,              # disable run_powershell (NOT sandboxed)
+        [switch]$NoShellTool,              # disable all shell lifecycle tools (NOT sandboxed)
         [switch]$NoSubAgents,              # disable the sub-agent tools
         [ValidateRange(1, 16)][int]$MaxSubAgents = 3,
         [Alias('AutoApprove')][switch]$YOLO, # skip y/N prompts for write/shell
@@ -368,6 +368,8 @@ function Invoke-AgentHarness {
         NoPromptSound   = [bool]$NoPromptSound
         AllowWrite      = [bool]$AllowWrite
         AllowShell      = [bool]($AllowShell -and -not $NoShellTool)
+        MaxToolOutputChars = $MaxToolOutputChars
+        ShellProcesses  = [ordered]@{}
         MaxSubAgents    = $MaxSubAgents
         SubAgents       = [Collections.Generic.List[string]]::new()
         SubAgentOptions = @{
@@ -689,6 +691,7 @@ function Invoke-AgentHarness {
         else { $final }
     }
     finally {
+        Close-AgentHarnessShellProcesses -Context $ctx
         foreach ($connection in $mcpConnections) { Close-AgentHarnessMcpConnection -Connection $connection }
     }
 }

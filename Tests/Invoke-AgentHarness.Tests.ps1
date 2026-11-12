@@ -8,7 +8,8 @@ param(
     [switch]$ContextOnly,
     [switch]$ProfilesOnly,
     [switch]$AutoCompactOnly,
-    [switch]$StreamingOnly
+    [switch]$StreamingOnly,
+    [switch]$ShellOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -189,12 +190,17 @@ try {
             Invoke-RestMethod -Method Post -Uri $Uri -Headers $Headers -ContentType 'application/json' -Body $Json -TimeoutSec $TimeoutSec
         }
     }
-    if ($StreamingOnly -or -not ($DecisionToolsOnly -or $SearchFilesOnly -or $PromptHistoryOnly -or $ContextOnly -or $ProfilesOnly -or $AutoCompactOnly)) {
+    if ($StreamingOnly -or -not ($DecisionToolsOnly -or $SearchFilesOnly -or $PromptHistoryOnly -or $ContextOnly -or $ProfilesOnly -or $AutoCompactOnly -or $ShellOnly)) {
         . (Join-Path $PSScriptRoot 'AgentHarness.Streaming.Tests.ps1')
         if ($StreamingOnly) {
             Write-Host "Passed $checks streaming checks. Isolated fixture and synthetic HTTP handler; no live requests."
             return
         }
+    }
+    if ($ShellOnly) {
+        . (Join-Path $PSScriptRoot 'AgentHarness.Shell.Tests.ps1')
+        Write-Host "Passed $checks shell checks. Isolated fixture, synthetic processes and mocked providers."
+        return
     }
     if ($DecisionToolsOnly) {
         . (Join-Path $PSScriptRoot 'AgentHarness.Decisions.Tests.ps1')
@@ -1052,7 +1058,7 @@ Compare @attach("media/image [1].PNG") @attach('report.pdf') @attach(media/clip.
     $result = Invoke-AgentHarness 'override' @withBuiltins -Tools @{ get_datetime = @{ Script = { param($a, $ctx) 'overridden' } } } -PassThru
     Assert-Harness ($result.Messages[3].content -eq 'overridden') 'Custom tool overrides built-in'
     $defaultNames = & $module { (Get-AgentHarnessBuiltinTools).Keys }
-    Assert-Harness ($defaultNames.Count -eq 18 -and $defaultNames -contains 'ask_user' -and $defaultNames -contains 'show_interactive_menu' -and $defaultNames -contains 'write_file' -and $defaultNames -contains 'edit_file' -and $defaultNames -contains 'run_powershell' -and $defaultNames -contains 'view_image' -and $defaultNames -contains 'spawn_agent' -and $defaultNames -contains 'agent_status' -and $defaultNames -contains 'wait_agent' -and $defaultNames -contains 'stop_agent' -and $defaultNames -contains 'load_skill' -and $defaultNames -contains 'read_skill_resource' -and $defaultNames -contains 'list_skills' -and $defaultNames -contains 'refresh_skills') 'Eighteen default built-in tools, including user questions, folder skills and sub-agent lifecycle tools'
+    Assert-Harness ($defaultNames.Count -eq 21 -and $defaultNames -contains 'ask_user' -and $defaultNames -contains 'show_interactive_menu' -and $defaultNames -contains 'write_file' -and $defaultNames -contains 'edit_file' -and $defaultNames -contains 'run_powershell' -and $defaultNames -contains 'view_image' -and $defaultNames -contains 'spawn_agent' -and $defaultNames -contains 'agent_status' -and $defaultNames -contains 'wait_agent' -and $defaultNames -contains 'stop_agent' -and $defaultNames -contains 'load_skill' -and $defaultNames -contains 'read_skill_resource' -and $defaultNames -contains 'list_skills' -and $defaultNames -contains 'refresh_skills') 'Twenty-one default built-in tools, including user questions, folder skills and process lifecycle tools'
 
     . (Join-Path $PSScriptRoot 'AgentHarness.UserQuestions.Tests.ps1')
 
@@ -1671,6 +1677,7 @@ exit 7
     Assert-Harness ($customRequests.Count -eq 4 -and $customRequests[1].Body.messages[-1].content[1].image_url.url -ceq 'data:image/png;base64,abc=' -and (ConvertTo-Json -InputObject $customRequests[1].Body.messages -Depth 20 -Compress) -ceq (ConvertTo-Json -InputObject $customRequests[2].Body.messages -Depth 20 -Compress)) 'Tool media bytes survive retries of the receiving model turn'
     Assert-Harness ($customRequests[3].Body.messages[3].content -ceq '[image: custom text part]') 'Tool media becomes a placeholder after the receiving turn succeeds'
 
+    . (Join-Path $PSScriptRoot 'AgentHarness.Shell.Tests.ps1')
     . (Join-Path $PSScriptRoot 'AgentHarness.Mcp.Tests.ps1')
     . (Join-Path $PSScriptRoot 'AgentHarness.Decisions.Tests.ps1')
     . (Join-Path $PSScriptRoot 'AgentHarness.PromptHistory.Tests.ps1')

@@ -1,26 +1,15 @@
 function Invoke-AgentHarnessShell {
-    param([string]$Command, [string]$WorkingDirectory)
+    param(
+        [string]$Command,
+        [string]$WorkingDirectory,
+        [ValidateRange(1, 86400)][int]$TimeoutSec = 60,
+        [int]$MaxOutputChars = 8000
+    )
 
-    $startInfo = [Diagnostics.ProcessStartInfo]::new((Get-Process -Id $PID).Path)
-    foreach ($argument in '-NoProfile', '-NonInteractive', '-Command', $Command) { $startInfo.ArgumentList.Add($argument) }
-    $startInfo.WorkingDirectory = $WorkingDirectory
-    $startInfo.UseShellExecute = $false
-    $startInfo.CreateNoWindow = $true
-    $startInfo.RedirectStandardOutput = $true
-    $startInfo.RedirectStandardError = $true
-
-    $process = [Diagnostics.Process]::Start($startInfo)
+    $process = New-AgentHarnessShellProcess -Command $Command -WorkingDirectory $WorkingDirectory -TimeoutSec $TimeoutSec
     try {
-        $stdout = $process.StandardOutput.ReadToEndAsync()
-        $stderr = $process.StandardError.ReadToEndAsync()
-        if (-not $process.WaitForExit(60000)) {
-            $process.Kill($true)
-            return 'ERROR: command timed out after 60s.'
-        }
-        $sections = @("exit code: $($process.ExitCode)")
-        if ($stdout.Result) { $sections += "Output:`n$($stdout.Result.TrimEnd("`r", "`n"))" }
-        if ($stderr.Result) { $sections += "Errors:`n$($stderr.Result.TrimEnd("`r", "`n"))" }
-        $sections -join "`n`n"
+        while (-not $process.Wait(250)) { }
+        Format-AgentHarnessShellResult -Process $process -MaxOutputChars $MaxOutputChars
     }
     finally { $process.Dispose() }
 }

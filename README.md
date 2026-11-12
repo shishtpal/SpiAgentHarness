@@ -11,6 +11,8 @@ The module is self-contained. Import does not load SpiPowershell, run credential
 
 Assistant responses stream by default. Use `-NoStream` for buffered requests or `-Quiet` to suppress live text. The pipeline still returns one completed answer or `-PassThru` result; interrupted streamed messages are not automatically replayed and their tool calls never execute. See [streaming responses](Docs/Invoke-AgentHarness.md#streaming-responses).
 
+For long builds and tests, the agent can use `start_powershell`, `poll_powershell` and `stop_powershell` with invocation-scoped IDs, configurable deadlines and bounded output. `run_powershell` still waits synchronously (default 60 seconds) and now accepts a custom deadline. See [long-running commands](Docs/Invoke-AgentHarness.md#long-running-powershell-commands).
+
 Public commands:
 
 - [Invoke-AgentHarness](Docs/Invoke-AgentHarness.md)
