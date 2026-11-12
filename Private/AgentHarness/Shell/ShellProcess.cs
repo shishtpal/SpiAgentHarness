@@ -30,6 +30,7 @@ namespace SpiAgentHarness
         private readonly StringBuilder error = new StringBuilder();
         private readonly Task outputReader;
         private readonly Task errorReader;
+        private readonly Task inputWriter;
         private readonly Task completion;
         private readonly Timer deadline;
         private long outputChars;
@@ -47,11 +48,16 @@ namespace SpiAgentHarness
         public bool Completed { get { lock (gate) { return completed; } } }
 
         public ShellProcess(string executable, string command, string directory, int timeoutSec)
+            : this(executable, new[] { "-NoProfile", "-NonInteractive", "-Command", command }, directory, timeoutSec, null, false)
+        {
+        }
+
+        public ShellProcess(string executable, string[] arguments, string directory, int timeoutSec, string input, bool utf8)
         {
             Id = Guid.NewGuid().ToString("N");
             TimeoutSec = timeoutSec;
             var start = new ProcessStartInfo(executable);
-            foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-Command", command })
+            foreach (var argument in arguments)
                 start.ArgumentList.Add(argument);
             start.WorkingDirectory = directory;
             start.UseShellExecute = false;
@@ -59,12 +65,36 @@ namespace SpiAgentHarness
             start.RedirectStandardInput = true;
             start.RedirectStandardOutput = true;
             start.RedirectStandardError = true;
+            if (utf8)
+            {
+                start.StandardOutputEncoding = new UTF8Encoding(false);
+                start.StandardErrorEncoding = new UTF8Encoding(false);
+            }
             process = Process.Start(start);
             try
             {
-                process.StandardInput.Close();
                 outputReader = Task.Run(() => Drain(process.StandardOutput, false));
                 errorReader = Task.Run(() => Drain(process.StandardError, true));
+                if (input == null)
+                {
+                    process.StandardInput.Close();
+                    inputWriter = Task.CompletedTask;
+                }
+                else
+                {
+                    // Feed code without shell quoting or command-line size limits.
+                    // Writing concurrently also keeps large input from blocking deadlines.
+                    inputWriter = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            var bytes = new UTF8Encoding(false).GetBytes(input);
+                            await process.StandardInput.BaseStream.WriteAsync(bytes, 0, bytes.Length).ConfigureAwait(false);
+                        }
+                        catch { lock (gate) { captureIncomplete = true; } }
+                        finally { try { process.StandardInput.Close(); } catch { } }
+                    });
+                }
                 // Assign the timer before launching a potentially fast monitor.
                 deadline = new Timer(_ => RequestStop("timed_out"), null, Timeout.Infinite, Timeout.Infinite);
                 deadline.Change(TimeSpan.FromSeconds(timeoutSec), TimeSpan.FromSeconds(1));
@@ -107,11 +137,12 @@ namespace SpiAgentHarness
                 lock (gate) { exitCode = process.ExitCode; }
                 deadline.Change(Timeout.Infinite, Timeout.Infinite);
                 // Descendants can hold inherited pipes after the parent exits.
-                if (!Task.WaitAll(new[] { outputReader, errorReader }, 1000))
+                if (!Task.WaitAll(new[] { outputReader, errorReader, inputWriter }, 1000))
                 {
                     lock (gate) { captureIncomplete = true; }
                     process.StandardOutput.Close();
                     process.StandardError.Close();
+                    process.StandardInput.Close();
                 }
             }
             catch { lock (gate) { captureIncomplete = true; } }

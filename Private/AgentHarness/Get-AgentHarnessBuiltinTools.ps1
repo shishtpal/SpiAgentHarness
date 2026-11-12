@@ -235,7 +235,13 @@ function Get-AgentHarnessBuiltinTools {
 
     if ($AllowShell) {
         $shellTools = Get-AgentHarnessShellTools
-        foreach ($name in $shellTools.Keys) { $tools[$name] = $shellTools[$name] }
+        foreach ($name in $shellTools.Keys) {
+            $tools[$name] = $shellTools[$name]
+        }
+        $pythonTools = Get-AgentHarnessPythonTools
+        foreach ($name in $pythonTools.Keys) {
+            $tools[$name] = $pythonTools[$name]
+        }
     }
 
     if ($AllowSubAgents) {

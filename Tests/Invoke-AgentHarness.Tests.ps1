@@ -9,7 +9,8 @@ param(
     [switch]$ProfilesOnly,
     [switch]$AutoCompactOnly,
     [switch]$StreamingOnly,
-    [switch]$ShellOnly
+    [switch]$ShellOnly,
+    [switch]$PythonOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -190,7 +191,7 @@ try {
             Invoke-RestMethod -Method Post -Uri $Uri -Headers $Headers -ContentType 'application/json' -Body $Json -TimeoutSec $TimeoutSec
         }
     }
-    if ($StreamingOnly -or -not ($DecisionToolsOnly -or $SearchFilesOnly -or $PromptHistoryOnly -or $ContextOnly -or $ProfilesOnly -or $AutoCompactOnly -or $ShellOnly)) {
+    if ($StreamingOnly -or -not ($DecisionToolsOnly -or $SearchFilesOnly -or $PromptHistoryOnly -or $ContextOnly -or $ProfilesOnly -or $AutoCompactOnly -or $ShellOnly -or $PythonOnly)) {
         . (Join-Path $PSScriptRoot 'AgentHarness.Streaming.Tests.ps1')
         if ($StreamingOnly) {
             Write-Host "Passed $checks streaming checks. Isolated fixture and synthetic HTTP handler; no live requests."
@@ -200,6 +201,11 @@ try {
     if ($ShellOnly) {
         . (Join-Path $PSScriptRoot 'AgentHarness.Shell.Tests.ps1')
         Write-Host "Passed $checks shell checks. Isolated fixture, synthetic processes and mocked providers."
+        return
+    }
+    if ($PythonOnly) {
+        . (Join-Path $PSScriptRoot 'AgentHarness.Python.Tests.ps1')
+        Write-Host "Passed $checks Python checks. Isolated fixture and synthetic runtimes; no live downloads."
         return
     }
     if ($DecisionToolsOnly) {
@@ -1058,7 +1064,7 @@ Compare @attach("media/image [1].PNG") @attach('report.pdf') @attach(media/clip.
     $result = Invoke-AgentHarness 'override' @withBuiltins -Tools @{ get_datetime = @{ Script = { param($a, $ctx) 'overridden' } } } -PassThru
     Assert-Harness ($result.Messages[3].content -eq 'overridden') 'Custom tool overrides built-in'
     $defaultNames = & $module { (Get-AgentHarnessBuiltinTools).Keys }
-    Assert-Harness ($defaultNames.Count -eq 21 -and $defaultNames -contains 'ask_user' -and $defaultNames -contains 'show_interactive_menu' -and $defaultNames -contains 'write_file' -and $defaultNames -contains 'edit_file' -and $defaultNames -contains 'run_powershell' -and $defaultNames -contains 'view_image' -and $defaultNames -contains 'spawn_agent' -and $defaultNames -contains 'agent_status' -and $defaultNames -contains 'wait_agent' -and $defaultNames -contains 'stop_agent' -and $defaultNames -contains 'load_skill' -and $defaultNames -contains 'read_skill_resource' -and $defaultNames -contains 'list_skills' -and $defaultNames -contains 'refresh_skills') 'Twenty-one default built-in tools, including user questions, folder skills and process lifecycle tools'
+    Assert-Harness ($defaultNames.Count -eq 22 -and $defaultNames -contains 'ask_user' -and $defaultNames -contains 'show_interactive_menu' -and $defaultNames -contains 'write_file' -and $defaultNames -contains 'edit_file' -and $defaultNames -contains 'run_powershell' -and $defaultNames -contains 'view_image' -and $defaultNames -contains 'spawn_agent' -and $defaultNames -contains 'agent_status' -and $defaultNames -contains 'wait_agent' -and $defaultNames -contains 'stop_agent' -and $defaultNames -contains 'load_skill' -and $defaultNames -contains 'read_skill_resource' -and $defaultNames -contains 'list_skills' -and $defaultNames -contains 'refresh_skills') 'Twenty-two default built-in tools, including Python, user questions, folder skills and process lifecycle tools'
 
     . (Join-Path $PSScriptRoot 'AgentHarness.UserQuestions.Tests.ps1')
 
@@ -1678,6 +1684,7 @@ exit 7
     Assert-Harness ($customRequests[3].Body.messages[3].content -ceq '[image: custom text part]') 'Tool media becomes a placeholder after the receiving turn succeeds'
 
     . (Join-Path $PSScriptRoot 'AgentHarness.Shell.Tests.ps1')
+    . (Join-Path $PSScriptRoot 'AgentHarness.Python.Tests.ps1')
     . (Join-Path $PSScriptRoot 'AgentHarness.Mcp.Tests.ps1')
     . (Join-Path $PSScriptRoot 'AgentHarness.Decisions.Tests.ps1')
     . (Join-Path $PSScriptRoot 'AgentHarness.PromptHistory.Tests.ps1')

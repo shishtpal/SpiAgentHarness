@@ -13,6 +13,8 @@ Assistant responses stream by default. Use `-NoStream` for buffered requests or 
 
 For long builds and tests, the agent can use `start_powershell`, `poll_powershell` and `stop_powershell` with invocation-scoped IDs, configurable deadlines and bounded output. `run_powershell` still waits synchronously (default 60 seconds) and now accepts a custom deadline. See [long-running commands](Docs/Invoke-AgentHarness.md#long-running-powershell-commands).
 
+The `run_python` tool runs Python 3 snippets with bounded output and deadlines. It tries uv first, then Python on PATH, then `SPI_AGENT_PYTHON`. uv can download Python and requested packages. See [Python code execution](Docs/Invoke-AgentHarness.md#python-code-execution).
+
 Public commands:
 
 - [Invoke-AgentHarness](Docs/Invoke-AgentHarness.md)

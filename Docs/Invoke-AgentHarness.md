@@ -185,11 +185,11 @@ The Kilo and Cline referers and titles match their [Kilo provider source](https:
 | `-McpConfigPath` | module's `mcp.json` | JSON configuration file. Aliases: `-McpConfigFile`, `-McpConfig`. Cannot be combined with `-McpServers`. An explicit server map overrides the shared default. |
 | `-NoBuiltinTools` | off | Do not register the built-in tools. |
 | `-AllowWrite` | on | The `write_file` and `edit_file` tools are available by default and require confirmation unless `-YOLO` is active. Use `-AllowWrite:$false` to disable both. |
-| `-NoShellTool` | off | Disable `run_powershell`, `start_powershell`, `poll_powershell` and `stop_powershell`. `-AllowShell` remains supported; `-AllowShell:$false` also disables them. **Shell commands are not sandboxed.** |
+| `-NoShellTool` | off | Disable `run_powershell`, `start_powershell`, `poll_powershell`, `stop_powershell` and `run_python`. `-AllowShell` remains supported; `-AllowShell:$false` also disables them. **Commands are not sandboxed.** |
 | `-NoSubAgents` | off | Disable `spawn_agent`, `agent_status`, `wait_agent` and `stop_agent`. Children always use this flag to prevent recursive delegation. Disabling shell execution also removes `spawn_agent`. |
 | `-MaxSubAgents` | `3` | Maximum active children launched by this invocation, from 1 to 16. Completed, failed, stopped or interrupted children release their slot. |
 | `-YOLO` | off | Skip the y/N confirmation for file changes, shell commands, sub-agent launch/stop, and MCP tools. Children inherit this value unless the launch specifies `yolo`. `-AutoApprove` remains accepted as an alias. |
-| `-WorkingDirectory` | current directory | Root for the file tools and the working directory for `run_powershell`. |
+| `-WorkingDirectory` | current directory | Root for the file tools and the working directory for PowerShell and Python execution. |
 | `-MaxToolOutputChars` | `8000` | Tool results longer than this are truncated before being sent to the model. Skill pages instead return an explicit error so instructions cannot be mistaken for a complete page; retry with smaller `max_chars`. |
 
 `MaxModelAttempts`, `TimeoutSec`, `MaxIterations`, and `MaxToolOutputChars` must be positive integers. `WorkingDirectory` must name an existing directory.
@@ -485,6 +485,7 @@ File tools reject paths lexically outside `-WorkingDirectory` (for example `..\.
 | `start_powershell` | default | `command`, optional `timeout_sec` | Starts an approved command and returns an opaque process ID immediately. Default deadline 1800 seconds; configurable from 1 to 86400. Requires `MaxToolOutputChars` of at least 256 to return control information. |
 | `poll_powershell` | default | `process_id`, optional `wait_ms` (0-1000, default 0) | Inspects a command owned by this invocation, optionally waiting briefly. Reports state, exit code when available and bounded output tails. Does not restart work or request approval. |
 | `stop_powershell` | default | `process_id` | Requests cancellation of an owned command and its process tree, then waits up to one second and reports status. Repeated stops are safe and require no duplicate approval. |
+| `run_python` | default | `code`, optional `timeout_sec` and `packages` | Runs a fresh Python 3 process after approval unless `-YOLO`. Resolves uv, Python on PATH, then `SPI_AGENT_PYTHON`. Default deadline 60 seconds, configurable from 1 to 86400; setup is included. Returns runtime, state, exit code and bounded stdout/stderr. |
 
 `search_files` prunes ignored directories before entering them. `ignore_dirs` extends the defaults; an empty array keeps the default exclusions. Entries are literal directory names matched case-insensitively at any depth, without paths or wildcards. Explicitly searching an ignored directory or its descendants also returns no matches. The working directory itself is always eligible, even if its name matches an exclusion. Files with these directory names are still eligible. `exclude_files` adds literal file names to skip at every depth, also case-insensitively and without paths or wildcards. `Initialize.ps1` is always excluded before opening files, even with an empty exclusion array or a matching `glob`. Hidden entries and file/directory symlinks or junctions are skipped. Files within each directory are sorted by name, followed by subdirectories visited alphabetically, depth-first. This tool does not read `.gitignore`.
 
@@ -537,6 +538,24 @@ Each command uses a separate `-NoProfile -NonInteractive` process in `WorkingDir
 Process IDs are local to one invocation, including its interactive continuation tasks. They are not operating-system PIDs and cannot address arbitrary processes or another invocation's commands. At most eight background commands may be active; the registry retains up to 32 records and evicts the oldest completed record when needed. IDs are not restored from `History` or context files. Normal invocation cleanup requests cancellation of outstanding commands on success, provider failure, iteration exhaustion or interruption that unwinds PowerShell's `finally` blocks. Collect results before returning a final answer. Abrupt host termination and deliberately detached descendants are not covered by this cleanup; process-tree termination depends on operating-system permissions.
 
 Both launch tools use the existing yes/no/guidance approval flow, including in `-Quiet`; `-YOLO` skips those prompts. Polling and cancelling operate only on already-owned work. `-NoShellTool`, `-AllowShell:$false`, and `-NoBuiltinTools` remove all four shell tools. Read-only child agents therefore receive none of them. These controls do not sandbox commands or roll back partial effects after failure or cancellation.
+
+### Python code execution
+
+Pass a JSON object to `run_python`:
+
+```json
+{"code":"import sys\nprint(sys.version)\nprint(sum(range(10)))","timeout_sec":120,"packages":[]}
+```
+
+The tool resolves `uv` on PATH first, then `python`, then `python3`, and finally the executable named by `SPI_AGENT_PYTHON`. That environment variable must contain an absolute executable path, without embedded command arguments or enclosing quotes. A bounded probe verifies Python 3 before selecting a candidate, skipping missing, broken, unsupported or timed-out candidates. uv's probe may take up to 30 seconds; each direct Python probe may take up to five seconds, limited by the remaining call deadline. On Windows, a WindowsApps command alias is therefore insufficient unless it successfully runs Python. Discovery happens only after approval, never during module import. If no runtime works, the tool explains how to configure one without printing environment values or probe output.
+
+uv runs with `--no-config --no-project --python 3`. It may download Python, and optional `packages` requirements are supplied as separate `--with` arguments, for example `"packages":["requests>=2","rich"]`. This avoids discovering or syncing the working project's configuration. uv's normal cache, network and environment settings still apply. With direct Python, only already-installed packages are available; a nonempty `packages` array requires usable uv and otherwise fails before executing the snippet. Dependencies are not installed globally by the tool. There is no automatic retry with a different runtime after snippet execution starts, including when uv dependency resolution fails.
+
+Each call starts a separate process in `WorkingDirectory`. Code is passed as UTF-8 through stdin with separate native arguments, without a PowerShell command wrapper. Python uses UTF-8 mode and unbuffered output. Globals do not persist, and stdin is closed after the code is delivered, so interactive `input()` is unavailable. The tool accepts up to 1,048,576 code characters and 64 package requirements of at most 512 characters each. Arguments must be a JSON object, and unknown keys are rejected.
+
+The deadline includes discovery, downloads, dependency setup and execution. Native process deadlines use whole seconds, rounded up for the remaining phase; process termination and pipe-drain cleanup may add a short grace period. Both output pipes are drained concurrently with bounded tails and explicit truncation notices. Results include the selected runtime source, terminal state and available exit code, even for failures. Timeout or interruption that unwinds the call's `finally` block stops the owned process tree; abruptly terminating the host or deliberately detaching descendants has the same limitations as PowerShell execution.
+
+Approval displays the code, requested packages, deadline and permission for uv downloads, including in `-Quiet`; `-YOLO` skips the prompt. `-NoShellTool`, `-AllowShell:$false`, and `-NoBuiltinTools` also remove `run_python`. Read-only child agents cannot use this built-in. Python executes as the current user and has the same filesystem and network access as a normal local process.
 
 ### Asking the user questions
 
