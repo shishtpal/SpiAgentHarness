@@ -82,6 +82,13 @@ Register-FreeModelProvider -Name Inception `
     -ChatUri 'https://api.inceptionlabs.ai/v1/chat/completions' `
     -KeyEnvVar 'INCEPTION_API_KEY' -RequireKey
 
+# Arena uses the OpenAI-compatible catalogue and chat schemas.
+# Use -All for paid models and routing entries without pricing.
+Register-FreeModelProvider -Name Arena `
+    -Uri 'https://api.arena.ai/v1/models' `
+    -ChatUri 'https://api.arena.ai/v1/chat/completions' `
+    -KeyEnvVar 'ARENA_API_KEY' -RequireKey
+
 # Public discovery; an optional key scopes the catalogue to the project.
 # Respan prices use input_cost/output_cost rather than prompt/completion.
 Register-FreeModelProvider -Name Respan `

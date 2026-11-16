@@ -130,7 +130,14 @@ try {
     $respanProvider = & $module { $script:FreeModelProviders['Respan'] }
     Assert-Harness ($null -ne $respanProvider -and -not $respanProvider.RequireKey -and $respanProvider.KeyEnvVar -eq 'RESPAN_API_KEY') 'Respan is registered with optional catalogue authentication'
     Assert-Harness ($respanProvider.Uri -eq 'https://api.respan.ai/api/v1/models' -and $respanProvider.ChatUri -eq 'https://gateway.respan.ai/chat/completions' -and -not $respanProvider.OmitToolChoice) 'Respan uses its documented catalogue, gateway and standard tool choice'
+    $arenaProvider = & $module { $script:FreeModelProviders['Arena'] }
+    Assert-Harness ($null -ne $arenaProvider -and $arenaProvider.RequireKey -and $arenaProvider.KeyEnvVar -eq 'ARENA_API_KEY') 'Arena is registered and requires its configured key'
+    Assert-Harness ($arenaProvider.Uri -eq 'https://api.arena.ai/v1/models' -and $arenaProvider.ChatUri -eq 'https://api.arena.ai/v1/chat/completions' -and -not $arenaProvider.OmitToolChoice) 'Arena uses its documented catalogue, chat endpoint and standard tool choice'
+    Assert-Harness (-not $arenaProvider.DecisionUri) 'Arena does not advertise an unsupported Decisions endpoint'
     foreach ($command in 'Get-FreeModels', 'Invoke-AgentHarness') {
+        $providerCompletion = "$command -Provider Are"
+        $matches = TabExpansion2 $providerCompletion $providerCompletion.Length
+        Assert-Harness ($matches.CompletionMatches.CompletionText -contains 'Arena') "$command completes Arena"
         $providerCompletion = "$command -Provider Resp"
         $matches = TabExpansion2 $providerCompletion $providerCompletion.Length
         Assert-Harness ($matches.CompletionMatches.CompletionText -contains 'Respan') "$command completes Respan"
@@ -720,6 +727,7 @@ Compare @attach("media/image [1].PNG") @attach('report.pdf') @attach(media/clip.
     }
     . (Join-Path $PSScriptRoot 'AgentHarness.Inception.Tests.ps1')
     . (Join-Path $PSScriptRoot 'AgentHarness.Respan.Tests.ps1')
+    . (Join-Path $PSScriptRoot 'AgentHarness.Arena.Tests.ps1')
 
     # Cohere discovery uses the native paginated catalogue; chat uses compatibility v1.
     & $module {

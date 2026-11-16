@@ -51,6 +51,17 @@ Invoke-AgentHarness 'Say hi' -Provider Respan -Pick -All
 
 Respan's [List models API](https://www.respan.ai/docs/apis/models/list-models) at `https://api.respan.ai/api/v1/models` supports public discovery without a key. Set `RESPAN_API_KEY` to list models available to your project; chat requests require that key. Model ids and context lengths are preserved. Free-only discovery requires both `pricing.input_cost` and `pricing.output_cost` to be explicitly zero; missing, null, invalid or nonzero prices are excluded, including ids ending in `:free`. Use `-All` to include paid and unknown-price models. Choose a chat-capable model from the catalogue. See [Respan gateway setup](Invoke-AgentHarness.md#respan).
 
+## Arena
+
+Set `ARENA_API_KEY`, then run:
+
+```powershell
+Get-FreeModels -Provider Arena -All
+Invoke-AgentHarness 'Say hi' -Provider Arena -Pick -All
+```
+
+Arena's [API reference](https://platform.arena.ai/docs/api-reference) documents authenticated discovery at `https://api.arena.ai/v1/models`. The catalogue uses OpenAI-compatible `data` entries; ids, names and context lengths are preserved when supplied. Use `-All` to include paid models and routing entries without pricing. The normal free-model filter still applies without `-All`; promotional credits do not make a paid model free. See [Arena setup](Invoke-AgentHarness.md#arena) for chat usage and workspace access restrictions.
+
 ## Custom catalogue mapping
 
 `Register-FreeModelProvider -GetModels` accepts a scriptblock whose first argument is the raw API response. An optional second argument is a hashtable containing the catalogue `Uri` and request `Headers`, allowing a mapper to fetch subsequent pages using the same authentication. Existing single-argument mappers continue to work. Return model objects with an `id` and optional `name`, `context_length`, and `pricing` fields.

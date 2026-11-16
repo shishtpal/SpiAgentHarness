@@ -233,6 +233,10 @@
     Invoke-AgentHarness 'Say hi' -Provider Inception -Pick -All
 
 .EXAMPLE
+    # Choose an Arena model (requires ARENA_API_KEY)
+    Invoke-AgentHarness 'Say hi' -Provider Arena -Pick -All
+
+.EXAMPLE
     # Custom tool
     $tools = @{
         get_weather = @{

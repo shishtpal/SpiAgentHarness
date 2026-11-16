@@ -115,7 +115,7 @@ Invoke-AgentHarness
 
 | Parameter | Default | Description |
 |---|---|---|
-| `-Provider` | none | Registry name (for example `OpenRouter`, `Kilo`, `Nous`, `OpenCode`, `ExperientialLabs`, `Cohere`, `Inception`, `Respan`). Limits auto-selection to that provider. With `-Model`, says which endpoint to use. Tab-completes from the registry. |
+| `-Provider` | none | Registry name (for example `OpenRouter`, `Kilo`, `Nous`, `OpenCode`, `ExperientialLabs`, `Cohere`, `Inception`, `Respan`, `Arena`). Limits auto-selection to that provider. With `-Model`, says which endpoint to use. Tab-completes from the registry. |
 | `-Model` | none | Custom model id. Skips auto-selection and uses exactly this id. |
 | `-ModelFilter` | `*` | Wildcard matched against model id or name when auto-selecting (passed to `Get-FreeModels -Name`). |
 | `-Pick` | off | Choose a model using `Show-InteractiveMenu` (arrow keys and Enter; Escape cancels). The chosen model is tried first; the rest remain as fallbacks. |
@@ -413,6 +413,24 @@ Discovery uses Cohere's [List Models API](https://docs.cohere.com/reference/list
 Chat uses Cohere's documented [OpenAI compatibility API](https://docs.cohere.com/docs/compatibility-api) at `https://api.cohere.ai/compatibility/v1/chat/completions`. This supports the harness's message history, tool definitions, tool results, and token accounting. The native [Chat API](https://docs.cohere.com/reference/chat) at `/v2/chat` uses a different response format and is not the endpoint used by this integration. `-ChatUri` overrides for Cohere must accept the OpenAI-compatible format.
 
 The same Bearer key is used for catalogue and chat requests. `-ApiKey` overrides chat authentication; catalogue discovery still uses `COHERE_API_KEY`. Pass an explicit `-Model` to skip discovery when using a chat key override. Existing retries and model recovery also apply to Cohere.
+
+### Arena
+
+`Arena` is registered automatically. Set `ARENA_API_KEY` in your PowerShell session using a key from the [Arena dashboard](https://platform.arena.ai/docs/getting-started), then run:
+
+```powershell
+Get-FreeModels -Provider Arena -All
+Invoke-AgentHarness 'Say hi' -Provider Arena -Pick -All
+
+# Use a permitted direct model without querying the catalogue
+Invoke-AgentHarness 'Say hi' -Provider Arena -Model 'claude-sonnet-4-6'
+```
+
+Discovery uses `https://api.arena.ai/v1/models`; chat uses `https://api.arena.ai/v1/chat/completions`. Both use Bearer authentication. Arena's [API reference](https://platform.arena.ai/docs/api-reference) documents the OpenAI-compatible catalogue, messages, tools and streaming format, so this provider reuses the existing chat runtime, tool loop, streaming, retries and model recovery. Use `-All` for paid models and routing entries without pricing. Catalogue entries are not a guarantee of access: model permissions, balance and workspace policy still apply.
+
+`-ApiKey` and `-ChatUri` override chat authentication and routing. Discovery still uses `ARENA_API_KEY`, so pass an explicit `-Model` when using only a chat key override. A custom chat endpoint must accept the OpenAI Chat Completions format.
+
+Arena Router aliases such as `coding-router-preview` require a workspace that permits API clients when used from this harness. Workspaces restricted to approved apps can return `403 organization_client_restricted`; permitted direct models have separate credit requirements. See Arena's [getting started guide](https://platform.arena.ai/docs/getting-started) and [limitations](https://platform.arena.ai/docs/limitations). This integration uses the harness's normal client identity. No Arena setup script or additional SDK is needed, and import makes no provider requests.
 
 ### Respan
 

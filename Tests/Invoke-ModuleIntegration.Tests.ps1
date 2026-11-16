@@ -54,6 +54,8 @@ try {
         Assert-Standalone (-not $module.ExportedFunctions.ContainsKey($name)) "$name remains private"
     }
     Assert-Standalone (@(Get-DecisionModels -All).Count -gt 0) 'Bundled decision catalogue works without external modules or requests'
+    $arena = & $module { Get-AgentHarnessProviderConfig -Provider Arena }
+    Assert-Standalone ($arena.ChatUri -eq 'https://api.arena.ai/v1/chat/completions' -and $arena.KeyEnvVar -eq 'ARENA_API_KEY') 'Relocated module registers Arena without a provider request'
     Assert-Standalone (@(Get-McpServer).Count -eq 0) 'Absent relocated MCP configuration starts no server'
     $root = & $module { Get-AgentHarnessDefaultSkillPath }
     Assert-Standalone ($root -eq (Join-Path $fixture '.agents/skills')) 'Default skills belong to the relocated module'
