@@ -39,7 +39,7 @@ try {
     Assert-Harness ($picked.Provider -eq 'Respan' -and $picked.Model -eq 'respan-paid' -and (& $module { $script:RecoveryMenus[0].Options.Count }) -eq 7) 'Respan Pick All offers the full catalogue'
 
     $respanTools = @{ echo = @{ Script = { param($a, $ctx) "echo:$($a.text)" } } }
-    Set-HarnessResponses @((New-HarnessResponse '' @((New-HarnessCall echo '{"text":"respan tool"}'))), (New-HarnessResponse 'respan complete'))
+    Set-HarnessResponses @((New-HarnessResponse '' @((New-HarnessCall echo '{"text":"respan tool"}' 'call_test'))), (New-HarnessResponse 'respan complete'))
     $result = Invoke-AgentHarness 'Use echo' @respan -All -ModelFilter 'respan-paid' -Tools $respanTools -PassThru
     $requests = @(Get-HarnessRequests)
     Assert-Harness ($result.Answer -eq 'respan complete' -and $result.Model -eq 'respan-paid' -and $requests.Count -eq 2) 'Respan auto-selection completes a tool-calling round trip'

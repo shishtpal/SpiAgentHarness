@@ -1,7 +1,8 @@
 function Invoke-AgentHarnessChatRequest {
-    param([string]$Uri, [hashtable]$Headers, [string]$Json, [int]$TimeoutSec, [switch]$Stream, [scriptblock]$OnText, [int]$MaxResponseChars = 16777216)
+    param([string]$Uri, [hashtable]$Headers, [string]$Json, [int]$TimeoutSec, [switch]$Stream, [scriptblock]$OnText, [int]$MaxResponseChars = 16777216, [hashtable]$Context)
 
     if (-not $Stream) {
+        Write-AgentHarnessPayloadDiagnostic -Context $Context -Data @{ boundary = 'transport'; transport = 'buffered-json' }
         return Invoke-RestMethod -Method Post -Uri $Uri -Headers $Headers -ContentType 'application/json' -Body $Json -TimeoutSec $TimeoutSec -ErrorAction Stop
     }
     $client = $null; $request = $null; $response = $null; $reader = $null
@@ -24,6 +25,7 @@ function Invoke-AgentHarnessChatRequest {
             throw $ex
         }
         $type = $response.Content.Headers.ContentType.MediaType
+        Write-AgentHarnessPayloadDiagnostic -Context $Context -Data @{ boundary = 'transport'; transport = $type }
         if ($failed -and $type -ne 'application/json') {
             $ex = [Exception]::new("Chat HTTP status $([int]$response.StatusCode).")
             $ex.Data['Status'] = [int]$response.StatusCode
@@ -35,7 +37,7 @@ function Invoke-AgentHarnessChatRequest {
         if ($type -eq 'text/event-stream') {
             if (-not ('SpiAgentHarness.ChatLineReader' -as [type])) { Add-Type -Path (Join-Path $PSScriptRoot 'ChatLineReader.cs') -ErrorAction Stop }
             $reader = [SpiAgentHarness.ChatLineReader]::new($reader, $MaxResponseChars)
-            return Read-AgentHarnessChatStream -Reader $reader -State $state -Timer $timer -TimeoutSec $TimeoutSec -OnText $OnText
+            return Read-AgentHarnessChatStream -Reader $reader -State $state -Timer $timer -TimeoutSec $TimeoutSec -OnText $OnText -Context $Context
         }
         # Some compatible endpoints ignore stream=true and return a normal JSON response.
         $buffer = [char[]]::new(4096)
@@ -60,12 +62,15 @@ function Invoke-AgentHarnessChatRequest {
         return $result
     }
     catch {
+        if ($response -and $response.IsSuccessStatusCode -and -not $_.Exception.Data['ProviderErrorBeforeOutput']) { $_.Exception.Data['ResponseIncomplete'] = $true }
         if ($response -and -not $response.IsSuccessStatusCode -and -not $_.Exception.Data.Contains('Status')) {
             $_.Exception.Data['Status'] = [int]$response.StatusCode
         }
         if ($state.Started) {
-            $ex = [Exception]::new('Chat stream interrupted. Partial output was not saved; no tools from this response were executed. Start a new request to retry.', $_.Exception)
+            $detail = if ($_.Exception.Message -like '*finish_reason=length*') { 'Provider response reached its output limit (finish_reason=length); no tools from this response were executed. Use smaller chunks.' } else { 'Chat stream interrupted. Partial output was not saved; no tools from this response were executed. Start a new request to retry.' }
+            $ex = [Exception]::new($detail, $_.Exception)
             $ex.Data['StreamStarted'] = $true
+            $ex.Data['ResponseIncomplete'] = $true
             $ex.Data['Status'] = [int]($_.Exception.Data['Status'] ?? 0)
             throw $ex
         }

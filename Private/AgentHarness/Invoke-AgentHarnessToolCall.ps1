@@ -23,6 +23,15 @@ function Invoke-AgentHarnessToolCall {
             $ErrorActionPreference = 'Stop'
             $parsed = ConvertFrom-Json -InputObject $arguments -AsHashtable -NoEnumerate -ErrorAction Stop
             if ($parsed -isnot [hashtable]) { throw 'Tool arguments must be a JSON object.' }
+            if ($tool.FileWriteTool) { $Context.FileWriteOutputLimit = $MaxOutputChars }
+            $Context.PayloadCallId = $Call.id
+            $metric = @{ boundary = 'parsed'; argument_chars = ([string]$arguments).Length; content_present = $parsed.ContainsKey('content') }
+            if ($parsed.content -is [string]) {
+                $metric.content_type = 'string'; $metric.content_chars = $parsed.content.Length
+            }
+            elseif ($null -eq $parsed.content) { $metric.content_type = 'null-or-missing' }
+            else { $metric.content_type = $parsed.content.GetType().Name }
+            Write-AgentHarnessPayloadDiagnostic -Context $Context -Data $metric
             # External scriptblocks can retain their caller's Continue preference.
             $raw = @(& $tool.Script $parsed $Context 2>&1)
             $toolError = $raw | Where-Object { $_ -is [Management.Automation.ErrorRecord] } | Select-Object -First 1

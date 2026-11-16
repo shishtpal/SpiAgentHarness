@@ -33,7 +33,7 @@ try {
     Assert-Harness ($picked.Provider -eq 'Inception' -and $picked.Model -eq 'mercury-test-paid' -and (& $module { $script:RecoveryMenus[0].Options.Count }) -eq 3) 'Inception Pick All offers the full chat catalogue'
 
     $inceptionTools = @{ echo = @{ Script = { param($a, $ctx) "echo:$($a.text)" } } }
-    Set-HarnessResponses @((New-HarnessResponse '' @((New-HarnessCall echo '{"text":"inception tool"}'))), (New-HarnessResponse 'inception complete'))
+    Set-HarnessResponses @((New-HarnessResponse '' @((New-HarnessCall echo '{"text":"inception tool"}' 'call_test'))), (New-HarnessResponse 'inception complete'))
     $roundTrip = Invoke-AgentHarness 'Use echo' @inception -All -ModelFilter '*paid' -Tools $inceptionTools -PassThru
     $requests = @(Get-HarnessRequests)
     Assert-Harness ($roundTrip.Answer -eq 'inception complete' -and $roundTrip.Model -eq 'mercury-test-paid' -and $requests.Count -eq 2) 'Inception auto-selection completes a tool-calling round trip'

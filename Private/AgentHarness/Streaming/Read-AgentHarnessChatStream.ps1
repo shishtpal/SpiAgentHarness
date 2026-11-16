@@ -1,5 +1,5 @@
 function Read-AgentHarnessChatStream {
-    param($Reader, [hashtable]$State, [Diagnostics.Stopwatch]$Timer, [int]$TimeoutSec, [scriptblock]$OnText)
+    param($Reader, [hashtable]$State, [Diagnostics.Stopwatch]$Timer, [int]$TimeoutSec, [scriptblock]$OnText, [hashtable]$Context)
 
     $data = [Collections.Generic.List[string]]::new()
     $done = $false
@@ -26,6 +26,15 @@ function Read-AgentHarnessChatStream {
         Add-AgentHarnessChatChunk -State $State -Chunk $chunk -OnText $OnText
     }
     if (-not $State.SeenChoice -or -not $State.Finished) { throw 'Chat stream did not contain a completed assistant message.' }
+    Write-AgentHarnessPayloadDiagnostic -Context $Context -Data @{ boundary = 'stream_completion'; finish_reason = $State.FinishReason; calls = $State.Calls.Count }
+    foreach ($parts in $State.Calls.Values) {
+        Write-AgentHarnessPayloadDiagnostic -Context $Context -Data @{
+            boundary = 'assembly'; call_id = $parts.id.ToString(); fragment_count = $parts.Fragments
+            fragment_chars = $parts.FragmentChars; assembled_chars = $parts.arguments.Length
+        }
+        if ($parts.FragmentChars -ne $parts.arguments.Length) { throw 'Tool argument assembly length mismatch; no tools were executed.' }
+    }
+    if ($State.FinishReason -ceq 'length') { throw 'Provider response reached its output limit (finish_reason=length); no tools from this response were executed.' }
     $ids = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $calls = @(
         foreach ($index in @($State.Calls.Keys | Sort-Object)) {

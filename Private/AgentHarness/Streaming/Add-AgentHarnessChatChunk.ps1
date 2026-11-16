@@ -13,6 +13,8 @@ function Add-AgentHarnessChatChunk {
         if ($tooLong -and -not $code) { $code = 400 }
         $ex = [Exception]::new($message)
         $ex.Data['Status'] = $code
+        if (-not $State.Started -and -not $Chunk.choices.Count) { $ex.Data['ProviderErrorBeforeOutput'] = $true }
+        else { $ex.Data['ResponseIncomplete'] = $true }
         throw $ex
     }
     if ($Chunk.choices -isnot [array]) { throw 'Streaming choices must be a JSON array.' }
@@ -43,7 +45,7 @@ function Add-AgentHarnessChatChunk {
             $index = 0
             if (-not [int]::TryParse([string]$call.index, [ref]$index) -or $index -lt 0 -or $index -gt 1023) { throw 'Invalid streaming tool-call index.' }
             if (-not $State.Calls.ContainsKey($index)) {
-                $State.Calls[$index] = @{ id = [Text.StringBuilder]::new(); name = [Text.StringBuilder]::new(); arguments = [Text.StringBuilder]::new() }
+                $State.Calls[$index] = @{ id = [Text.StringBuilder]::new(); name = [Text.StringBuilder]::new(); arguments = [Text.StringBuilder]::new(); FragmentChars = 0; Fragments = 0 }
             }
             $target = $State.Calls[$index]
             if ($call.type -and $call.type -cne 'function') { throw 'Unsupported streaming tool-call type.' }
@@ -54,6 +56,10 @@ function Add-AgentHarnessChatChunk {
             foreach ($field in 'name', 'arguments') {
                 if ($null -eq $call.function.$field) { continue }
                 if ($call.function.$field -isnot [string]) { throw 'Invalid streaming tool-call delta.' }
+                if ($field -eq 'arguments') {
+                    $target.FragmentChars += $call.function.$field.Length
+                    $target.Fragments++
+                }
                 $null = $target[$field].Append($call.function.$field)
             }
         }

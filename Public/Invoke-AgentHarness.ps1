@@ -71,6 +71,17 @@
     are not saved or automatically replayed; their tool calls never execute.
     Structured context summaries always use buffered requests.
 
+.PARAMETER FileWriteOptions
+    Invocation-local limits for exact UTF-8 file writes and staged sessions.
+    Defaults: MaxChunkBytes=4096, MaxFileBytes=16777216, MaxActiveSessions=4,
+    MaxStagedBytes=67108864, MaxArgumentBytes=65536, MaxReceipts=256, MaxChunks=65536.
+    Sessions are private to this invocation and are cleaned up when it exits.
+
+.PARAMETER ToolPayloadDiagnostics
+    Emit bounded payload metadata on the information stream: response completion,
+    streamed argument counts, parsed content type/count, UTF-8 size/hash and disk verification.
+    Does not add payload bodies or credential logs. Quiet suppresses these diagnostics.
+
 .PARAMETER Prompt
     The user message, as a string or an array of lines (for example Get-Clipboard).
     Arrays are joined with platform newlines, preserving blank lines.
@@ -306,7 +317,7 @@ function Invoke-AgentHarness {
         [AllowEmptyCollection()][string[]]$McpServer, # activate selected JSON servers, or '*' for all
         [Alias('McpConfigFile', 'McpConfig')][ValidateNotNullOrEmpty()][string]$McpConfigPath,
         [switch]$NoBuiltinTools,
-        [switch]$AllowWrite = $true,       # -AllowWrite:$false disables write_file and edit_file
+        [switch]$AllowWrite = $true,       # disables all built-in file mutation tools when false
         [switch]$AllowShell = $true,       # compatibility; -AllowShell:$false disables it
         [switch]$NoShellTool,              # disable all shell lifecycle tools (NOT sandboxed)
         [switch]$NoSubAgents,              # disable the sub-agent tools
@@ -314,6 +325,8 @@ function Invoke-AgentHarness {
         [Alias('AutoApprove')][switch]$YOLO, # skip y/N prompts for write/shell
         [string]$WorkingDirectory = (Get-Location).Path,
         [ValidateRange(1, [int]::MaxValue)][int]$MaxToolOutputChars = 8000,
+        [hashtable]$FileWriteOptions,
+        [switch]$ToolPayloadDiagnostics,
 
         # --- output ---------------------------------------------------------
         [switch]$Quiet,                    # turn the verbose trace off
@@ -373,6 +386,8 @@ function Invoke-AgentHarness {
         AllowWrite      = [bool]$AllowWrite
         AllowShell      = [bool]($AllowShell -and -not $NoShellTool)
         MaxToolOutputChars = $MaxToolOutputChars
+        FileWriteState  = New-AgentHarnessFileWriteState -Options $FileWriteOptions
+        ToolPayloadDiagnostics = [bool]$ToolPayloadDiagnostics
         ShellProcesses  = [ordered]@{}
         MaxSubAgents    = $MaxSubAgents
         SubAgents       = [Collections.Generic.List[string]]::new()
@@ -384,6 +399,8 @@ function Invoke-AgentHarness {
             MaxIterations = $MaxIterations; MaxToolOutputChars = $MaxToolOutputChars
             TimeoutSec = $TimeoutSec; NoPromptSound = [bool]$NoPromptSound
             NoStream = [bool]$NoStream
+            FileWriteOptions = $FileWriteOptions
+            ToolPayloadDiagnostics = [bool]$ToolPayloadDiagnostics
         }
         SubAgentApiKey  = $ApiKey
         ChatHeaders    = Get-AgentHarnessIdentityHeaders -PretendAgent $PretendAgent
@@ -495,6 +512,8 @@ function Invoke-AgentHarness {
                 Write-Host -Object $Delta -NoNewline -ForegroundColor Gray
             }.GetNewClosure()
             try {
+                $ctx.PayloadTurn = $iteration
+                $ctx.PayloadCallId = $null
                 $turn = Invoke-AgentHarnessTurn -State $state -Messages $messages -ToolSpecs $toolSpecs `
                     -ChatUri $ChatUri -ApiKey $ApiKey -TimeoutSec $TimeoutSec -Temperature $Temperature `
                     -NoStream:$NoStream -OnText $onText `
@@ -695,6 +714,7 @@ function Invoke-AgentHarness {
         else { $final }
     }
     finally {
+        Close-AgentHarnessFileWrites -Context $ctx
         Close-AgentHarnessShellProcesses -Context $ctx
         foreach ($connection in $mcpConnections) { Close-AgentHarnessMcpConnection -Connection $connection }
     }

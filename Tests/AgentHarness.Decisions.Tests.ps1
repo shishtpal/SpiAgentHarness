@@ -83,7 +83,10 @@ try {
             null { $bad = $null }
         }
         $before = & $module { $script:DecisionRequests.Count }
-        Assert-Harness ((Invoke-ScreenTest -Arguments $bad) -like 'ERROR:*') "Invalid screen arguments are rejected: $invalidCase"
+        if ($invalidCase -in 'array', 'empty', 'null') {
+            Assert-HarnessThrows { Invoke-ScreenTest -Arguments $bad } '*JSON object*'
+        }
+        else { Assert-Harness ((Invoke-ScreenTest -Arguments $bad) -like 'ERROR:*') "Invalid screen arguments are rejected: $invalidCase" }
         Assert-Harness ((& $module { $script:DecisionRequests.Count }) -eq $before) 'Invalid screen arguments never invoke a model'
     }
     Assert-Harness ((Invoke-ScreenTest -OutputLimit 50) -like 'ERROR: Decision result exceeds*') 'Decision results cannot be silently truncated'

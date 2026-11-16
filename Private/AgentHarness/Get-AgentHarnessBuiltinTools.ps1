@@ -211,26 +211,8 @@ function Get-AgentHarnessBuiltinTools {
             Script = { param($a, $ctx) Invoke-AgentHarnessEditFile -Arguments $a -Context $ctx }
         }
 
-        $tools['write_file'] = @{
-            Description = 'Create or overwrite a text file relative to the working directory. The user confirms each write unless YOLO mode is enabled.'
-            RequiresApproval = $true
-            Parameters  = @{
-                type       = 'object'
-                properties = @{
-                    path    = @{ type = 'string' }
-                    content = @{ type = 'string' }
-                }
-                required   = @('path', 'content')
-            }
-            Script      = {
-                param($a, $ctx)
-                $file = Resolve-AgentHarnessPath $ctx.Root $a.path
-                if (-not (Confirm-AgentHarnessAction $ctx "write $($a.path):`n$([string]$a.content)")) { return 'ERROR: the user denied this write.' }
-                $null = New-Item -ItemType Directory -Force -Path (Split-Path $file -Parent)
-                Set-Content -LiteralPath $file -Value ([string]$a.content) -Encoding utf8NoBOM
-                'Wrote {0} chars to {1}' -f ([string]$a.content).Length, $a.path
-            }
-        }
+        $fileTools = Get-AgentHarnessFileWriteTools
+        foreach ($name in $fileTools.Keys) { $tools[$name] = $fileTools[$name] }
     }
 
     if ($AllowShell) {

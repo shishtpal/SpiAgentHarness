@@ -34,7 +34,7 @@ try {
     Assert-Harness ($picked.Provider -eq 'Arena' -and $picked.Model -eq 'arena-test-paid' -and (& $module { $script:RecoveryMenus[0].Options.Count }) -eq 4) 'Arena Pick All offers the full catalogue'
 
     $arenaTools = @{ echo = @{ Script = { param($a, $ctx) "echo:$($a.text)" } } }
-    Set-HarnessResponses @((New-HarnessResponse '' @((New-HarnessCall echo '{"text":"arena tool"}'))), (New-HarnessResponse 'arena complete'))
+    Set-HarnessResponses @((New-HarnessResponse '' @((New-HarnessCall echo '{"text":"arena tool"}' 'call_test'))), (New-HarnessResponse 'arena complete'))
     $roundTrip = Invoke-AgentHarness 'Use echo' @arena -All -ModelFilter '*paid' -Tools $arenaTools -PassThru
     $requests = @(Get-HarnessRequests)
     Assert-Harness ($roundTrip.Answer -eq 'arena complete' -and $roundTrip.Model -eq 'arena-test-paid' -and $requests.Count -eq 2) 'Arena auto-selection completes a tool-calling round trip'

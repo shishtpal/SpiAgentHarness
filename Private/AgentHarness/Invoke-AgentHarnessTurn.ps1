@@ -76,8 +76,12 @@ function Invoke-AgentHarnessTurn {
             }
             if ($null -ne $Temperature) { $body['temperature'] = [double]$Temperature }
             & $Log "[turn $Iteration] -> [$($candidate.Provider)] $($candidate.Id)" 'Cyan'
+            if ($CompactionContext) {
+                $CompactionContext.PayloadProvider = $candidate.Provider
+                $CompactionContext.PayloadModel = $candidate.Id
+            }
 
-            $response = Invoke-AgentHarnessChat -Uri $connection.ChatUri -ApiKey $key -Body $body -TimeoutSec $TimeoutSec -Log $Log -RequestHeaders $RequestHeaders -Stream:(-not $NoStream) -OnText $OnText
+            $response = Invoke-AgentHarnessChat -Uri $connection.ChatUri -ApiKey $key -Body $body -TimeoutSec $TimeoutSec -Log $Log -RequestHeaders $RequestHeaders -Stream:(-not $NoStream) -OnText $OnText -Context $CompactionContext
 
             $State.Locked = $true
             return [pscustomobject]@{
@@ -87,7 +91,7 @@ function Invoke-AgentHarnessTurn {
         catch {
             $failure = $_
             # A truncated streamed attempt cannot enter compaction, fallback or recovery replay.
-            if ($failure.Exception.Data['StreamStarted']) { throw }
+            if ($failure.Exception.Data['StreamStarted'] -or $failure.Exception.Data['ResponseIncomplete']) { throw }
             if (-not $compactionRetryUsed -and $CompactionContext.AutoCompact.Enabled -and
                 -not $CompactionContext.AutoCompact.MeasureOnly -and
                 (Invoke-AgentHarnessCompaction -Classify -Failure $failure)) {

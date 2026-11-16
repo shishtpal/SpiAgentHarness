@@ -10,7 +10,8 @@ param(
     [switch]$AutoCompactOnly,
     [switch]$StreamingOnly,
     [switch]$ShellOnly,
-    [switch]$PythonOnly
+    [switch]$PythonOnly,
+    [switch]$FileWritesOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -52,7 +53,7 @@ function New-HarnessResponse {
 }
 
 function New-HarnessCall {
-    param([string]$Name, [object]$Arguments = '{}', [string]$Id = 'call_test')
+    param([string]$Name, [object]$Arguments = '{}', [string]$Id = ('call_' + [guid]::NewGuid().ToString('N')))
     @{ id = $Id; type = 'function'; function = @{ name = $Name; arguments = $Arguments } }
 }
 
@@ -188,22 +189,28 @@ try {
             if (-not $script:Responses.Count) { throw 'No mocked response remains; network access is disabled.' }
             $next = $script:Responses.Dequeue()
             if ($next -is [Exception]) { throw $next }
+            if ($next -is [scriptblock]) { return & $next $script:Requests[-1].Body }
             $next
         }
         function script:Start-Sleep { param([int]$Seconds) $script:Delays.Add($Seconds) }
         function script:New-AgentHarnessChatClient { throw 'Unexpected live streaming request.' }
         function script:Invoke-AgentHarnessChatRequest {
-            param($Uri, $Headers, $Json, $TimeoutSec, [switch]$Stream, $OnText)
+            param($Uri, $Headers, $Json, $TimeoutSec, [switch]$Stream, $OnText, $Context)
             # Behavioral suites use completed provider responses; streaming has its own transport suite.
             Invoke-RestMethod -Method Post -Uri $Uri -Headers $Headers -ContentType 'application/json' -Body $Json -TimeoutSec $TimeoutSec
         }
     }
-    if ($StreamingOnly -or -not ($DecisionToolsOnly -or $SearchFilesOnly -or $PromptHistoryOnly -or $ContextOnly -or $ProfilesOnly -or $AutoCompactOnly -or $ShellOnly -or $PythonOnly)) {
+    if ($StreamingOnly -or -not ($DecisionToolsOnly -or $SearchFilesOnly -or $PromptHistoryOnly -or $ContextOnly -or $ProfilesOnly -or $AutoCompactOnly -or $ShellOnly -or $PythonOnly -or $FileWritesOnly)) {
         . (Join-Path $PSScriptRoot 'AgentHarness.Streaming.Tests.ps1')
         if ($StreamingOnly) {
             Write-Host "Passed $checks streaming checks. Isolated fixture and synthetic HTTP handler; no live requests."
             return
         }
+    }
+    if ($FileWritesOnly) {
+        . (Join-Path $PSScriptRoot 'AgentHarness.FileWrites.Tests.ps1')
+        Write-Host "Passed $checks file-write checks. Isolated fixtures and mocked providers; no live requests."
+        return
     }
     if ($ShellOnly) {
         . (Join-Path $PSScriptRoot 'AgentHarness.Shell.Tests.ps1')
@@ -640,10 +647,8 @@ Compare @attach("media/image [1].PNG") @attach('report.pdf') @attach(media/clip.
         long  = @{ Description = 'Long'; Script = { param($a, $ctx) 'abcdefghijklmnopqrstuvwxyz' } }
     }
     $calls = @(
-        (New-HarnessCall echo @{ text = 'ok' } ''),
+        (New-HarnessCall echo @{ text = 'ok' }),
         (New-HarnessCall missing),
-        (New-HarnessCall echo '{'),
-        (New-HarnessCall echo '[]'),
         (New-HarnessCall fail),
         (New-HarnessCall empty),
         (New-HarnessCall long)
@@ -656,11 +661,10 @@ Compare @attach("media/image [1].PNG") @attach('report.pdf') @attach(media/clip.
     $toolResults = @($result.Messages | Where-Object role -eq tool)
     Assert-Harness ($result.Answer -eq 'tools complete' -and $result.Iterations -eq 2 -and $result.PromptTokens -eq 20) 'Tool round trip'
     Assert-Harness ($toolResults[0].content -like 'ok@SpiHarnessTests-*') 'Object arguments and context'
-    Assert-Harness ($toolResults[0].tool_call_id -like 'call_*') 'Missing tool id generated'
+    Assert-Harness ($toolResults[0].tool_call_id -ceq $calls[0].id) 'Tool id preserved'
     Assert-Harness ($toolResults[1].content -like 'ERROR: unknown tool*') 'Unknown tool result'
-    Assert-Harness ($toolResults[2].content -like 'ERROR:*' -and $toolResults[3].content -like 'ERROR:*JSON object*') 'Malformed and non-object arguments rejected'
-    Assert-Harness ($toolResults[4].content -like 'ERROR: ordinary tool failure*') 'Ordinary tool errors are returned to the agent'
-    Assert-Harness ($toolResults[5].content -eq '(no output)') 'Empty tool output'
+    Assert-Harness ($toolResults[2].content -like 'ERROR: ordinary tool failure*') 'Ordinary tool errors are returned to the agent'
+    Assert-Harness ($toolResults[3].content -eq '(no output)') 'Empty tool output'
     Assert-Harness (@(Get-HarnessRequests)[1].Body.messages[-1].role -eq 'tool') 'Tool results sent in the next request'
     Set-HarnessResponses @((New-HarnessResponse '' @((New-HarnessCall long))), (New-HarnessResponse))
     $result = Invoke-AgentHarness 'truncate' @basic -Tools $tools -PassThru -MaxToolOutputChars 10
@@ -768,7 +772,7 @@ Compare @attach("media/image [1].PNG") @attach('report.pdf') @attach(media/clip.
         Assert-Harness ($picked.Provider -eq 'Cohere' -and $picked.Model -eq 'command-test-two') 'Pick All offers Cohere chat models from every catalogue page'
 
         $cohereTools = @{ echo = @{ Script = { param($a, $ctx) "echo:$($a.text)" } } }
-        Set-HarnessResponses @((New-HarnessResponse '' @((New-HarnessCall echo '{"text":"cohere tool"}'))), (New-HarnessResponse 'cohere complete'))
+        Set-HarnessResponses @((New-HarnessResponse '' @((New-HarnessCall echo '{"text":"cohere tool"}' 'call_test'))), (New-HarnessResponse 'cohere complete'))
         $roundTrip = Invoke-AgentHarness 'Use echo' @cohere -All -ModelFilter '*one' -Tools $cohereTools -Temperature 0.2 -PassThru
         $requests = @(Get-HarnessRequests)
         Assert-Harness ($roundTrip.Answer -eq 'cohere complete' -and $roundTrip.Model -eq 'command-test-one' -and $requests.Count -eq 2) 'Cohere auto-selection completes a tool-calling round trip'
@@ -898,7 +902,7 @@ Compare @attach("media/image [1].PNG") @attach('report.pdf') @attach(media/clip.
     Assert-Harness ($recovered.Answer -eq 'continued with replacement' -and $recovered.Model -eq 'second:free') 'Exhausted 429 retries allow choosing another model mid-run'
     Assert-Harness ($recovered.Iterations -eq 2 -and $requests.Count -eq 6) 'Recovery retries the same turn without consuming an extra model turn'
     Assert-Harness ($script:RecoveryToolExecutions -eq 1 -and $recovered.Messages.Count -eq 5) 'Completed tool is not re-executed or duplicated during model recovery'
-    Assert-Harness ($requests[-1].Body.messages[-1].content -eq 'completed once' -and $requests[-1].Body.messages[-1].tool_call_id -eq 'call_test') 'Replacement request preserves tool output and call id'
+    Assert-Harness ($requests[-1].Body.messages[-1].content -eq 'completed once' -and $requests[-1].Body.messages[-1].tool_call_id -like 'call_*') 'Replacement request preserves tool output and call id'
     Assert-Harness (($requests[1].Body.messages | ConvertTo-Json -Depth 20 -Compress) -eq ($requests[-1].Body.messages | ConvertTo-Json -Depth 20 -Compress)) 'Replacement receives the full unchanged conversation'
     Assert-Harness ($recovered.PromptTokens -eq 20 -and $recovered.CompletionTokens -eq 4) 'Token totals include successful turns across models'
     Assert-Harness ((& $module { $script:Delays -join ',' }) -eq '2,4,8') 'Rate-limit retry budget is exhausted before recovery prompt'
@@ -1072,7 +1076,7 @@ Compare @attach("media/image [1].PNG") @attach('report.pdf') @attach(media/clip.
     $result = Invoke-AgentHarness 'override' @withBuiltins -Tools @{ get_datetime = @{ Script = { param($a, $ctx) 'overridden' } } } -PassThru
     Assert-Harness ($result.Messages[3].content -eq 'overridden') 'Custom tool overrides built-in'
     $defaultNames = & $module { (Get-AgentHarnessBuiltinTools).Keys }
-    Assert-Harness ($defaultNames.Count -eq 22 -and $defaultNames -contains 'ask_user' -and $defaultNames -contains 'show_interactive_menu' -and $defaultNames -contains 'write_file' -and $defaultNames -contains 'edit_file' -and $defaultNames -contains 'run_powershell' -and $defaultNames -contains 'view_image' -and $defaultNames -contains 'spawn_agent' -and $defaultNames -contains 'agent_status' -and $defaultNames -contains 'wait_agent' -and $defaultNames -contains 'stop_agent' -and $defaultNames -contains 'load_skill' -and $defaultNames -contains 'read_skill_resource' -and $defaultNames -contains 'list_skills' -and $defaultNames -contains 'refresh_skills') 'Twenty-two default built-in tools, including Python, user questions, folder skills and process lifecycle tools'
+    Assert-Harness ($defaultNames.Count -eq 27 -and $defaultNames -contains 'ask_user' -and $defaultNames -contains 'show_interactive_menu' -and $defaultNames -contains 'write_file' -and $defaultNames -contains 'edit_file' -and $defaultNames -contains 'run_powershell' -and $defaultNames -contains 'view_image' -and $defaultNames -contains 'spawn_agent' -and $defaultNames -contains 'agent_status' -and $defaultNames -contains 'wait_agent' -and $defaultNames -contains 'stop_agent' -and $defaultNames -contains 'load_skill' -and $defaultNames -contains 'read_skill_resource' -and $defaultNames -contains 'list_skills' -and $defaultNames -contains 'refresh_skills') 'Twenty-seven default built-in tools, including Python, user questions, folder skills and process lifecycle tools'
 
     . (Join-Path $PSScriptRoot 'AgentHarness.UserQuestions.Tests.ps1')
 
@@ -1339,13 +1343,13 @@ exit 7
     & $module { $script:ConfirmationReplies.Enqueue('y') }
     Set-HarnessResponses @((New-HarnessResponse '' @($writeCall)), (New-HarnessResponse))
     $approved = Invoke-AgentHarness 'approve write' @withBuiltins -PassThru 6>$null
-    Assert-Harness ((Get-Content -LiteralPath $writePath -Raw).Trim() -eq 'replacement text' -and $approved.Messages[3].content -like 'Wrote*') 'Approved write updates the file'
+    Assert-Harness ([IO.File]::ReadAllText($writePath) -ceq 'replacement text' -and $approved.Messages[3].content -like 'Wrote*') 'Approved write updates the file'
     $promptCount = & $module { $script:ConfirmationPrompts.Count }
     Assert-Harness ($promptCount -eq 5) 'Every non-YOLO shell command and write asks for approval'
     Assert-Harness ((& $module { $script:ApprovalSounds.Count }) -eq $promptCount) 'Each file approval also plays a sound, including Quiet mode'
     Set-HarnessResponses @((New-HarnessResponse '' @((New-HarnessCall write_file '{"path":"yolo-write.txt","content":"no prompt"}'))), (New-HarnessResponse))
     $yoloWrite = Invoke-AgentHarness 'yolo write' @withBuiltins -YOLO -PassThru
-    Assert-Harness ((Get-Content -LiteralPath (Join-Path $fixture 'yolo-write.txt') -Raw).Trim() -eq 'no prompt' -and (& $module { $script:ConfirmationPrompts.Count }) -eq $promptCount) 'YOLO writes without asking for confirmation'
+    Assert-Harness ([IO.File]::ReadAllText((Join-Path $fixture 'yolo-write.txt')) -ceq 'no prompt' -and (& $module { $script:ConfirmationPrompts.Count }) -eq $promptCount) 'YOLO writes without asking for confirmation'
     Assert-Harness ((& $module { $script:ApprovalSounds.Count }) -eq $promptCount) 'YOLO file writing skips notification sounds'
     Set-HarnessResponses @((New-HarnessResponse))
     $null = Invoke-AgentHarness 'disable writing' @withBuiltins -AllowWrite:$false
@@ -1400,7 +1404,7 @@ exit 7
             Assert-Harness ($replan[3].content -notlike '*Skipped*' -and $replan[4].content -like 'ERROR: the user denied*') 'Completed tools stay completed and the proposed action is denied'
             Assert-Harness ($replan[5].content -like 'Skipped:*' -and $replan[6].content -like 'Skipped:*') 'All remaining tools, including read-only tools, are skipped for replanning'
             Assert-Harness (($replan[3..6].tool_call_id -join ',') -eq "prior_read,$($proposed.id),pending_write,pending_read") 'Every tool-call ID has a response before the guidance user message'
-            Assert-Harness ((Get-Content -LiteralPath (Join-Path $fixture 'guidance-revised.txt') -Raw).Trim() -eq 'revised plan' -and $guided.Messages[9].content -like 'Wrote*') 'Approval feedback clears before the revised batch executes'
+            Assert-Harness ([IO.File]::ReadAllText((Join-Path $fixture 'guidance-revised.txt')) -ceq 'revised plan' -and $guided.Messages[9].content -like 'ERROR: File-write result exceeds*') 'Approval feedback clears before the revised batch executes; a small output limit returns an explicit receipt error'
             Assert-Harness ((& $module { $script:ConfirmationPrompts[$script:ConfirmationPrompts.Count - 2] }) -like '*type guidance*') 'Approval prompt advertises custom guidance'
             $compacted = & $module {
                 param($history)
@@ -1691,6 +1695,7 @@ exit 7
     Assert-Harness ($customRequests.Count -eq 4 -and $customRequests[1].Body.messages[-1].content[1].image_url.url -ceq 'data:image/png;base64,abc=' -and (ConvertTo-Json -InputObject $customRequests[1].Body.messages -Depth 20 -Compress) -ceq (ConvertTo-Json -InputObject $customRequests[2].Body.messages -Depth 20 -Compress)) 'Tool media bytes survive retries of the receiving model turn'
     Assert-Harness ($customRequests[3].Body.messages[3].content -ceq '[image: custom text part]') 'Tool media becomes a placeholder after the receiving turn succeeds'
 
+    . (Join-Path $PSScriptRoot 'AgentHarness.FileWrites.Tests.ps1')
     . (Join-Path $PSScriptRoot 'AgentHarness.Shell.Tests.ps1')
     . (Join-Path $PSScriptRoot 'AgentHarness.Python.Tests.ps1')
     . (Join-Path $PSScriptRoot 'AgentHarness.Mcp.Tests.ps1')
@@ -1700,6 +1705,10 @@ exit 7
     . (Join-Path $PSScriptRoot 'AgentHarness.AutoCompact.Tests.ps1')
 
     Write-Host "Passed $checks checks. No Initialize.ps1 access or live API requests."
+}
+catch {
+    Write-Host ("Harness failure: {0}" -f $_.ScriptStackTrace)
+    throw
 }
 finally {
     if ($module) { Remove-Module $module -Force }

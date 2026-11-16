@@ -185,6 +185,62 @@ try {
     $saved = Invoke-AgentHarness 'Summary task' @streamOptions -SaveContextPath 'stream-summary.json' -ContextMode Summary -Quiet -PassThru
     Assert-Harness ($saved.ContextPath -and $streamHandler.Bodies.Count -eq 1 -and -not (@(Get-HarnessRequests)[0].Body.PSObject.Properties['stream'])) 'Structured context summary remains buffered after a streamed chat turn'
 
+    # Large literal writes traverse the actual HTTP reader, SSE/JSON parser, gate and writer.
+    $largeWriteOptions = @{ Model = 'synthetic'; ChatUri = 'https://provider.invalid/chat'; WorkingDirectory = $fixture; NoAgentsFile = $true; NoPromptHistory = $true; NoModelRecovery = $true; NoPromptSound = $true; Quiet = $true; YOLO = $true }
+    foreach ($size in 17000, 102400, 1048576) {
+        $seed = "abc`"\`n"
+        $literal = ($seed * ([int][Math]::Ceiling($size / $seed.Length))).Substring(0, $size)
+        $arguments = ConvertTo-Json -InputObject @{ path = 'stream-large.txt'; content = $literal; expected_bytes = $size } -Compress
+        $wire = [Text.StringBuilder]::new()
+        for ($offset = 0; $offset -lt $arguments.Length; $offset += 4096) {
+            $call = @{ index = 0; function = @{ arguments = $arguments.Substring($offset, [Math]::Min(4096, $arguments.Length - $offset)) } }
+            if ($offset -eq 0) { $call.id = 'large_write'; $call.type = 'function'; $call.function.name = 'write_file' }
+            $null = $wire.Append((New-StreamingEvent @{ tool_calls = @($call) }))
+        }
+        $null = $wire.Append((New-StreamingEvent @{} tool_calls)).Append("data: [DONE]`n`n")
+        foreach ($media in 'text/event-stream', 'application/json') {
+            $body = if ($media -eq 'text/event-stream') { $wire.ToString() } else { New-HarnessResponse '' @((New-HarnessCall write_file $arguments)) | ConvertTo-Json -Depth 20 -Compress }
+            Set-StreamingResponses @(@{ Body = $body; MediaType = $media; ReadSize = 65536 }, @{ Body = (New-StreamingResponse 'large write done'); ReadSize = 65536 })
+            $null = Invoke-AgentHarness 'Synthetic large literal write' @largeWriteOptions
+            $actual = [IO.File]::ReadAllBytes((Join-Path $fixture 'stream-large.txt'))
+            Assert-Harness ($actual.Length -eq $size -and [Text.Encoding]::UTF8.GetString($actual) -ceq $literal) "$media preserves $size literal bytes through the real transport and writer"
+        }
+    }
+    foreach ($media in 'text/event-stream', 'application/json') {
+        $arguments = '{"path":"stream-partial.txt","content":"must not write"}'
+        $response = New-HarnessResponse '' @((New-HarnessCall write_file $arguments))
+        $response.choices[0].finish_reason = 'length'
+        $body = if ($media -eq 'text/event-stream') {
+            (New-StreamingEvent @{ tool_calls = @(@{ index = 0; id = 'partial_write'; type = 'function'; function = @{ name = 'write_file'; arguments = $arguments } }) } length) + "data: [DONE]`n`n"
+        }
+        else { ConvertTo-Json -InputObject $response -Depth 20 -Compress }
+        Set-StreamingResponses @(@{ Body = $body; MediaType = $media; ReadSize = 65536 })
+        $failure = Get-StreamingFailure { Invoke-AgentHarness 'Incomplete provider output' @largeWriteOptions }
+        Assert-Harness ($failure.Exception.Message -like '*finish_reason=length*' -and -not (Test-Path -LiteralPath (Join-Path $fixture 'stream-partial.txt')) -and $streamHandler.Bodies.Count -eq 1) "$media rejects length completion with no write or replay"
+    }
+
+    $arguments = '{"path":"stream-diagnostic.txt","content":"synthetic diagnostic text"}'
+    $wire = (New-StreamingEvent @{ tool_calls = @(@{ index = 0; id = 'diagnostic_write'; type = 'function'; function = @{ name = 'write_file'; arguments = $arguments.Substring(0, 20) } }) }) +
+        (New-StreamingEvent @{ tool_calls = @(@{ index = 0; function = @{ arguments = $arguments.Substring(20) } }) } tool_calls) + "data: [DONE]`n`n"
+    Set-StreamingResponses @(@{ Body = $wire; ReadSize = 4096 }, (New-StreamingResponse 'diagnostics done'))
+    $streamDiagnosticInfo = @()
+    $null = Invoke-AgentHarness 'Synthetic streaming diagnostics' @largeWriteOptions -Quiet:$false -ToolPayloadDiagnostics -InformationVariable streamDiagnosticInfo 6>$null
+    $assembly = @($streamDiagnosticInfo | ForEach-Object { [string]$_.MessageData } | Where-Object { $_ -like 'Payload: *' } | ForEach-Object { ConvertFrom-Json -InputObject $_.Substring(9) } | Where-Object boundary -eq assembly)
+    Assert-Harness ($assembly.Count -eq 1 -and $assembly[0].fragment_count -eq 2 -and $assembly[0].fragment_chars -eq $arguments.Length -and $assembly[0].assembled_chars -eq $arguments.Length) 'Streaming diagnostics independently count received fragments and assembled arguments'
+    $failure = Get-StreamingFailure {
+        & $module {
+            $state = @{ Started = $false; SeenChoice = $false; Finished = $false; Calls = @{}; Response = @{}; Text = @{} }
+            foreach ($field in 'content','reasoning','reasoning_content','refusal') { $state.Text[$field] = [Text.StringBuilder]::new() }
+            $chunk = '{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"fault","type":"function","function":{"name":"probe","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}' | ConvertFrom-Json
+            Add-AgentHarnessChatChunk -State $state -Chunk $chunk
+            $null = $state.Calls[0].arguments.Append(' ')
+            $reader = [IO.StringReader]::new("data: [DONE]`n`n")
+            try { Read-AgentHarnessChatStream -Reader $reader -State $state -Timer ([Diagnostics.Stopwatch]::StartNew()) -TimeoutSec 5 }
+            finally { $reader.Dispose() }
+        }
+    }
+    Assert-Harness ($failure.Exception.Message -like '*assembly length mismatch*') 'Injected assembly loss/addition fails before a completed response can execute'
+
     # Checkpoint acknowledges completion without repeating streamed content.
     & $module { function script:Read-Host { param($Prompt) 'exit' } }
     try {

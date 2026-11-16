@@ -232,8 +232,8 @@ try {
     foreach ($json in '[]', '[{}]', 'null', '42') {
         $config = New-McpFixtureConfig
         $config.AutoApproveTools = @('echo')
-        $result = Invoke-McpFixtureHarness -Config $config -Json $json
-        Assert-Harness ($result.Messages[3].content -like 'ERROR:*JSON object*' -and @((Read-McpFixtureLog $config) | Where-Object method -eq 'tools/call').Count -eq 0) 'Invalid outer JSON never reaches the MCP server'
+        Assert-HarnessThrows { Invoke-McpFixtureHarness -Config $config -Json $json } '*JSON object*'
+        Assert-Harness (@((Read-McpFixtureLog $config) | Where-Object method -eq 'tools/call').Count -eq 0) 'Invalid outer JSON is rejected before any call reaches the MCP server'
     }
     foreach ($preference in 'Continue', 'Stop') {
         foreach ($tool in 'fail', 'rpcfail', 'structured') {
